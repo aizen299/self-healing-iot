@@ -5,6 +5,7 @@ import io.fleet.common.DeviceEventType;
 import io.fleet.common.DeviceHealth;
 import io.fleet.common.DeviceStatus;
 import io.fleet.common.StoreException;
+import io.fleet.common.StoreIntegrity;
 import io.fleet.common.Telemetry;
 import io.fleet.common.TelemetryStore;
 
@@ -54,21 +55,52 @@ public final class H2TelemetryStore implements TelemetryStore {
                  missed_heartbeats, recovery_duration_ms)
             VALUES (?, ?, ?, ?, ?, ?, ?)""";
 
+    private final String jdbcUrl;
     private final Connection connection;
     private final int batchSize;
     private final PreparedStatement insertTelemetry;
     private int buffered;
 
+    /**
+     * Readings lost since this store opened.
+     *
+     * <p>Kept in memory as well as in {@code store_integrity} because the
+     * failure that loses readings may equally prevent the durable marker from
+     * landing. This count is always right; the table is best effort.
+     */
+    private long droppedWrites;
+
     public H2TelemetryStore(StoreConfig config) throws StoreException {
         this.batchSize = config.batchSize();
+        // Resolved once: the in-memory form is unique per call, so asking the
+        // config again would open a second, empty database.
+        this.jdbcUrl = config.newJdbcUrl();
         try {
-            this.connection = DriverManager.getConnection(config.jdbcUrl());
+            this.connection = DriverManager.getConnection(jdbcUrl);
             this.connection.setAutoCommit(false);
             applySchema();
             this.insertTelemetry = connection.prepareStatement(INSERT_TELEMETRY);
         } catch (SQLException e) {
-            throw new StoreException("could not open the telemetry store at "
-                    + config.jdbcUrl(), e);
+            throw new StoreException("could not open the telemetry store at " + jdbcUrl, e);
+        }
+    }
+
+    /** The database this store actually opened. */
+    public String jdbcUrl() {
+        return jdbcUrl;
+    }
+
+    /**
+     * Runs a statement directly. Exists so a test can break the store on
+     * purpose — the failure path is the one that decides whether a lost batch
+     * is counted, and it cannot be covered without provoking a real failure.
+     */
+    synchronized void executeForTest(String sql) throws StoreException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(sql);
+            connection.commit();
+        } catch (SQLException e) {
+            throw new StoreException("test statement failed: " + sql, e);
         }
     }
 
@@ -146,12 +178,57 @@ public final class H2TelemetryStore implements TelemetryStore {
             connection.commit();
             buffered = 0;
         } catch (SQLException e) {
-            // The counter is cleared regardless: leaving it set would retry the
-            // same doomed batch on every subsequent write and turn one failure
-            // into a permanently stuck store.
+            int lost = buffered;
             buffered = 0;
-            throw new StoreException("could not flush buffered telemetry", e);
+            discardFailedBatch();
+            droppedWrites += lost;
+            recordLoss(lost, e.getMessage());
+            // The message names how many readings went, not that a flush
+            // failed: one failure can lose a whole batch, and the count of
+            // lost rows is the number that matters to anyone reading this.
+            throw new StoreException("could not flush " + lost + " buffered readings", e);
         }
+    }
+
+    /**
+     * Abandons a batch that failed, leaving nothing behind.
+     *
+     * <p>Both halves matter. Without the rollback, rows that did apply sit in
+     * an open transaction and are committed by the next successful flush,
+     * resurrecting part of a batch the caller was told had failed. Without
+     * {@code clearBatch}, the same doomed rows are retried on every later
+     * write, turning one failure into a permanently stuck store.
+     */
+    private void discardFailedBatch() {
+        try {
+            connection.rollback();
+        } catch (SQLException e) {
+            System.err.println("could not roll back a failed telemetry batch: " + e.getMessage());
+        }
+        try {
+            insertTelemetry.clearBatch();
+        } catch (SQLException e) {
+            System.err.println("could not clear a failed telemetry batch: " + e.getMessage());
+        }
+    }
+
+    /** Records a loss durably, so a later query over this window knows about it. */
+    private void recordLoss(int lost, String reason) {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO store_integrity (at_ts, dropped_count, reason) VALUES (?, ?, ?)")) {
+            statement.setLong(1, System.currentTimeMillis());
+            statement.setInt(2, lost);
+            statement.setString(3, truncate(String.valueOf(reason)));
+            statement.executeUpdate();
+            connection.commit();
+        } catch (SQLException e) {
+            System.err.println("lost " + lost + " readings and could not record the loss: "
+                    + e.getMessage());
+        }
+    }
+
+    private static String truncate(String reason) {
+        return reason.length() <= 500 ? reason : reason.substring(0, 497) + "...";
     }
 
     @Override
@@ -276,11 +353,28 @@ public final class H2TelemetryStore implements TelemetryStore {
     @Override
     public synchronized OptionalDouble meanRecoveryMillis(long fromMillis, long toMillis)
             throws StoreException {
+        // Parameterised like every other query in this class. Splicing the
+        // enum between two text blocks worked only because a quote at the end
+        // of one met a quote at the start of the next, and any reflow of
+        // either block would have silently produced malformed SQL.
         String sql = """
                 SELECT AVG(recovery_duration_ms) FROM device_event
-                 WHERE event = '""" + DeviceEventType.DEVICE_RECOVERED.name() + """
-                '  AND recovery_duration_ms > 0 AND at_ts BETWEEN ? AND ?""";
-        return singleAverage(sql, fromMillis, toMillis, "mean recovery time");
+                 WHERE event = ? AND recovery_duration_ms > 0
+                   AND at_ts BETWEEN ? AND ?""";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, DeviceEventType.DEVICE_RECOVERED.name());
+            statement.setLong(2, fromMillis);
+            statement.setLong(3, toMillis);
+            try (ResultSet rows = statement.executeQuery()) {
+                rows.next();
+                double value = rows.getDouble(1);
+                // AVG over no rows is SQL NULL, which getDouble reports as 0.0
+                // — indistinguishable from a genuine zero without wasNull().
+                return rows.wasNull() ? OptionalDouble.empty() : OptionalDouble.of(value);
+            }
+        } catch (SQLException e) {
+            throw new StoreException("could not compute mean recovery time", e);
+        }
     }
 
     @Override
@@ -296,6 +390,30 @@ public final class H2TelemetryStore implements TelemetryStore {
         } catch (SQLException e) {
             throw new StoreException("could not count readings for " + deviceId, e);
         }
+    }
+
+    @Override
+    public synchronized StoreIntegrity integrity(long fromMillis, long toMillis)
+            throws StoreException {
+        String sql = """
+                SELECT COALESCE(SUM(dropped_count), 0), COUNT(*), COALESCE(MAX(at_ts), 0)
+                  FROM store_integrity
+                 WHERE at_ts BETWEEN ? AND ?""";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, fromMillis);
+            statement.setLong(2, toMillis);
+            try (ResultSet rows = statement.executeQuery()) {
+                rows.next();
+                return new StoreIntegrity(rows.getLong(1), rows.getLong(2), rows.getLong(3));
+            }
+        } catch (SQLException e) {
+            throw new StoreException("could not read store integrity", e);
+        }
+    }
+
+    @Override
+    public synchronized long droppedWrites() {
+        return droppedWrites;
     }
 
     @Override

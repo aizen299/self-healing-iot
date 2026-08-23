@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import io.fleet.common.StoreException;
+import io.fleet.common.StoreIntegrity;
 import io.fleet.common.Telemetry;
 import io.fleet.common.TelemetryStore;
 
@@ -42,6 +43,16 @@ public final class HealthApi implements AutoCloseable {
 
     /** Default /stats window when the caller gives no bounds. */
     private static final long DEFAULT_WINDOW_MILLIS = 5 * 60 * 1000L;
+
+    /**
+     * Cap on rows returned by /history.
+     *
+     * <p>The whole result is materialised and then serialised in memory before
+     * a byte is written, and the gateway's footprint is something Phase 8
+     * measures — an unbounded default would hold a device's entire history
+     * twice in the heap of the process being measured.
+     */
+    private static final int MAX_HISTORY_ROWS = 5_000;
 
     private final DeviceRegistry registry;
     private final GatewayMetrics metrics;
@@ -192,14 +203,23 @@ public final class HealthApi implements AutoCloseable {
         long to = parseLongOr(query.get("to"), System.currentTimeMillis());
         long from = parseLongOr(query.get("from"), 0L);
 
+        int limit = (int) Math.min(MAX_HISTORY_ROWS,
+                Math.max(1L, parseLongOr(query.get("limit"), MAX_HISTORY_ROWS)));
+
         try {
-            List<Telemetry> readings = store.history(deviceId, from, to);
+            List<Telemetry> all = store.history(deviceId, from, to);
+            boolean truncated = all.size() > limit;
+            List<Telemetry> readings = truncated ? all.subList(0, limit) : all;
+            var integrity = store.integrity(from, to);
+
             respond(exchange, 200, write(generator -> {
                 generator.writeStartObject();
                 generator.writeStringField("deviceId", deviceId);
                 generator.writeNumberField("from", from);
                 generator.writeNumberField("to", to);
                 generator.writeNumberField("count", readings.size());
+                generator.writeBooleanField("truncated", truncated);
+                writeIntegrity(generator, integrity);
                 generator.writeArrayFieldStart("readings");
                 for (Telemetry reading : readings) {
                     generator.writeStartObject();
@@ -233,11 +253,13 @@ public final class HealthApi implements AutoCloseable {
             List<String> failed = store.currentlyFailedDevices();
             var meanRecovery = store.meanRecoveryMillis(from, to);
             int recoveries = store.recoveries(from, to).size();
+            var integrity = store.integrity(from, to);
 
             respond(exchange, 200, write(generator -> {
                 generator.writeStartObject();
                 generator.writeNumberField("from", from);
                 generator.writeNumberField("to", to);
+                writeIntegrity(generator, integrity);
                 if (averageTemperature.isPresent()) {
                     generator.writeNumberField("fleetAverageTemperature",
                             averageTemperature.getAsDouble());
@@ -261,6 +283,26 @@ public final class HealthApi implements AutoCloseable {
         } catch (StoreException e) {
             respondStoreFailure(exchange, e);
         }
+    }
+
+    /**
+     * Writes the window's integrity alongside the figures it qualifies.
+     *
+     * <p>The gateway keeps running when the store fails, so a window can have
+     * holes while every number over it looks entirely normal. Emitting the
+     * gap count next to the numbers means a consumer — a chart, a report, a
+     * person — cannot read past it by accident, and gives the reproducibility
+     * contract something concrete to check.
+     */
+    private static void writeIntegrity(JsonGenerator generator, StoreIntegrity integrity)
+            throws IOException {
+        generator.writeObjectFieldStart("integrity");
+        generator.writeBooleanField("complete", integrity.isComplete());
+        generator.writeNumberField("droppedWrites", integrity.droppedWrites());
+        generator.writeNumberField("dropEvents", integrity.dropEvents());
+        generator.writeNumberField("lastDropAtMillis", integrity.lastDropAtMillis());
+        generator.writeStringField("summary", integrity.describe());
+        generator.writeEndObject();
     }
 
     /**

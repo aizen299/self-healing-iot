@@ -135,15 +135,11 @@ public final class HealthMonitor implements AutoCloseable {
      * reacting to.
      */
     private void persist(HealthTransition transition) {
-        DeviceEventType type = switch (transition.to()) {
-            case OFFLINE -> DeviceEventType.DEVICE_OFFLINE;
-            case RECOVERING -> DeviceEventType.DEVICE_RECOVERING;
-            case ONLINE -> transition.isRecovery() ? DeviceEventType.DEVICE_RECOVERED : null;
-            case SUSPECTED, UNKNOWN -> null;
-        };
-        if (type == null) {
+        var announceable = transition.eventType();
+        if (announceable.isEmpty()) {
             return;
         }
+        DeviceEventType type = announceable.get();
         try {
             store.recordEvent(new DeviceEventRecord(
                     transition.deviceId(), type, transition.from(), transition.to(),

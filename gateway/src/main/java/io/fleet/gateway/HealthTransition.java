@@ -1,6 +1,9 @@
 package io.fleet.gateway;
 
+import io.fleet.common.DeviceEventType;
 import io.fleet.common.DeviceHealth;
+
+import java.util.Optional;
 
 /**
  * A change in the gateway's judgement of a device.
@@ -37,6 +40,29 @@ public record HealthTransition(
         // counted and timed.
         return to == DeviceHealth.ONLINE
                 && (from == DeviceHealth.RECOVERING || from == DeviceHealth.OFFLINE);
+    }
+
+    /**
+     * The event this transition should be announced and recorded as, if any.
+     *
+     * <p>One definition, used by both the publisher and the store. Two copies
+     * of this switch meant the live event stream and the stored history could
+     * come to disagree about which transitions matter, and the divergence
+     * would only surface when someone reconciled a recovery against the record
+     * of why it happened.
+     *
+     * <p>Empty for SUSPECTED: that is the detector hedging against a lost
+     * QoS 0 message, and announcing it would invite consumers to act on what
+     * is explicitly not yet a failure.
+     */
+    public Optional<DeviceEventType> eventType() {
+        return switch (to) {
+            case OFFLINE -> Optional.of(DeviceEventType.DEVICE_OFFLINE);
+            case RECOVERING -> Optional.of(DeviceEventType.DEVICE_RECOVERING);
+            case ONLINE -> isRecovery()
+                    ? Optional.of(DeviceEventType.DEVICE_RECOVERED) : Optional.empty();
+            case SUSPECTED, UNKNOWN -> Optional.empty();
+        };
     }
 
     /**

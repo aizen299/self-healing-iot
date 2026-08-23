@@ -5,6 +5,7 @@ import io.fleet.common.DeviceEventType;
 import io.fleet.common.DeviceHealth;
 import io.fleet.common.DeviceStatus;
 import io.fleet.common.StoreException;
+import io.fleet.common.StoreIntegrity;
 import io.fleet.common.Telemetry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +19,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class H2TelemetryStoreTest {
@@ -37,9 +39,6 @@ class H2TelemetryStoreTest {
     @AfterEach
     void tearDown() throws Exception {
         if (store != null) {
-            // Drops the shared in-memory database so tests cannot see each
-            // other's rows; DB_CLOSE_DELAY=-1 keeps it alive otherwise.
-            store.pruneTelemetryBefore(Long.MAX_VALUE);
             store.close();
         }
     }
@@ -151,6 +150,66 @@ class H2TelemetryStoreTest {
             assertEquals(1L, reopened.readingCount("device-001"),
                     "buffered readings must be flushed on close, not lost");
             assertEquals(List.of("device-001"), reopened.currentlyFailedDevices());
+        }
+    }
+
+    @Test
+    @DisplayName("two in-memory stores do not share a database")
+    void inMemoryStoresAreIsolated() throws Exception {
+        // A fixed in-memory name made every store in the JVM share rows, so
+        // this suite had to prune between cases to fake isolation - and two
+        // gateways in one JVM would have merged their histories.
+        try (H2TelemetryStore other = new H2TelemetryStore(config(Map.of(
+                "GATEWAY_STORE_PATH", "mem")))) {
+            store.record(reading("device-001", T0, 20.0d), T0);
+            store.flush();
+
+            assertEquals(1L, store.readingCount("device-001"));
+            assertEquals(0L, other.readingCount("device-001"),
+                    "a separate store must not see another's readings");
+        }
+    }
+
+    @Test
+    @DisplayName("a complete history says so, and a caller can check")
+    void integrityReportsACleanWindow() throws Exception {
+        store.record(reading("device-001", T0, 20.0d), T0);
+        store.flush();
+
+        StoreIntegrity integrity = store.integrity(0L, Long.MAX_VALUE);
+
+        assertTrue(integrity.isComplete());
+        assertEquals(0L, integrity.droppedWrites());
+        assertEquals(0L, store.droppedWrites());
+        assertEquals("complete", integrity.describe());
+    }
+
+    @Test
+    @DisplayName("a lost batch is counted in readings, not in failures")
+    void droppedWritesAreCountedAndReported() throws Exception {
+        H2TelemetryStore fragile = new H2TelemetryStore(config(Map.of(
+                "GATEWAY_STORE_PATH", tempDir.resolve("fragile").toString(),
+                "GATEWAY_STORE_BATCH_SIZE", "1000")));
+        try (fragile) {
+            for (int i = 0; i < 5; i++) {
+                fragile.record(reading("device-001", T0 + i, 20.0d), T0 + i);
+            }
+            // Pull the table out from under the buffered batch: the flush now
+            // fails with five readings pending.
+            fragile.executeForTest("DROP TABLE telemetry");
+
+            assertThrows(StoreException.class, fragile::flush);
+
+            // The number that matters is how many readings went, not that one
+            // flush failed - a single failure can lose a whole batch.
+            assertEquals(5L, fragile.droppedWrites());
+            StoreIntegrity integrity = fragile.integrity(0L, Long.MAX_VALUE);
+            assertFalse(integrity.isComplete());
+            assertEquals(5L, integrity.droppedWrites());
+            assertEquals(1L, integrity.dropEvents());
+            assertTrue(integrity.describe().contains("INCOMPLETE"), integrity.describe());
+        } catch (StoreException expectedOnClose) {
+            // close() flushes, and the table is gone; the assertions above ran.
         }
     }
 
