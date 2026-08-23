@@ -6,8 +6,10 @@ import io.fleet.common.DeviceEventType;
 import io.fleet.common.FleetTopic;
 import io.fleet.common.Presence;
 import io.fleet.common.Telemetry;
+import io.fleet.common.TelemetryStore;
 import io.fleet.common.TelemetryValidator;
 import io.fleet.common.Topics;
+import io.fleet.common.StoreException;
 import io.fleet.common.ValidationException;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttCallback;
@@ -44,6 +46,7 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
     private final HeartbeatParser heartbeatParser = new HeartbeatParser();
     private final JsonFactory json = new JsonFactory();
     private final HealthPolicy policy;
+    private final TelemetryStore store;
     /**
      * Set after construction to break a genuine cycle: the monitor announces
      * transitions through this class as its EventPublisher, and this class
@@ -55,18 +58,25 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
     private final MqttClient client;
 
     public MqttIngestor(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics) {
-        this(config, registry, metrics, config.healthPolicy(), Clock.systemUTC());
+        this(config, registry, metrics, config.healthPolicy(),
+                new io.fleet.gateway.store.NoOpTelemetryStore(), Clock.systemUTC());
+    }
+
+    public MqttIngestor(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
+            HealthPolicy policy, TelemetryStore store) {
+        this(config, registry, metrics, policy, store, Clock.systemUTC());
     }
 
     /** @param policy shared with the monitor so one object defines the rules */
     public MqttIngestor(
             GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
-            HealthPolicy policy, Clock clock) {
+            HealthPolicy policy, TelemetryStore store, Clock clock) {
         this.config = config;
         this.registry = registry;
         this.metrics = metrics;
         this.clock = clock;
         this.policy = policy;
+        this.store = store;
         try {
             this.client = new MqttClient(
                     config.brokerUrl(), config.clientId(), new MemoryPersistence());
@@ -175,8 +185,20 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
             return;
         }
 
-        registry.recordTelemetry(telemetry, clock.millis());
+        long receivedAt = clock.millis();
+        registry.recordTelemetry(telemetry, receivedAt);
         metrics.telemetryAccepted();
+
+        try {
+            store.record(telemetry, receivedAt);
+        } catch (StoreException e) {
+            // Counted, not fatal. A store that cannot keep up must not stop
+            // the gateway detecting failures — losing history is bad, losing
+            // detection is worse.
+            metrics.storeError();
+            System.err.println("could not persist a reading from " + deviceId
+                    + ": " + e.getMessage());
+        }
     }
 
     private void handleHeartbeat(String topic, String deviceId, byte[] payload) {

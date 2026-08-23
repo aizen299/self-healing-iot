@@ -27,6 +27,7 @@ public final class GatewayMetrics {
     private final LongAdder recoveryDurationTotalMillis = new LongAdder();
     private final LongAdder monitorErrors = new LongAdder();
     private final LongAdder eventPublishFailures = new LongAdder();
+    private final LongAdder storeErrors = new LongAdder();
 
     public void telemetryAccepted() {
         telemetryAccepted.increment();
@@ -105,6 +106,15 @@ public final class GatewayMetrics {
 
     public void eventPublishFailure() {
         eventPublishFailures.increment();
+    }
+
+    /** A read or write the store rejected. History is lossy when this moves. */
+    public void storeError() {
+        storeErrors.increment();
+    }
+
+    public long storeErrorCount() {
+        return storeErrors.sum();
     }
 
     public long heartbeatsAcceptedCount() {

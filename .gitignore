@@ -37,6 +37,12 @@ logs/
 *.pem
 *.key
 
+# Embedded store files written by a local gateway run.
+# Experiment data belongs in experiments/results/, not in a scratch database.
+data/
+*.mv.db
+*.trace.db
+
 # JVM crash / profiling artifacts
 hs_err_pid*.log
 *.hprof

@@ -5,14 +5,19 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import io.fleet.common.StoreException;
 import io.fleet.common.Telemetry;
+import io.fleet.common.TelemetryStore;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 
@@ -35,19 +40,31 @@ public final class HealthApi implements AutoCloseable {
 
     private static final int STOP_DELAY_SECONDS = 1;
 
+    /** Default /stats window when the caller gives no bounds. */
+    private static final long DEFAULT_WINDOW_MILLIS = 5 * 60 * 1000L;
+
     private final DeviceRegistry registry;
     private final GatewayMetrics metrics;
     private final HttpServer server;
+    private final TelemetryStore store;
     private final JsonFactory json = new JsonFactory();
 
     public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics)
             throws IOException {
+        this(config, registry, metrics, new io.fleet.gateway.store.NoOpTelemetryStore());
+    }
+
+    public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
+            TelemetryStore store) throws IOException {
         this.registry = registry;
         this.metrics = metrics;
+        this.store = store;
         this.server = HttpServer.create(
                 new InetSocketAddress(config.httpHost(), config.httpPort()), 0);
         this.server.createContext("/health", guarded(this::handleHealth));
         this.server.createContext("/devices", guarded(this::handleDevices));
+        this.server.createContext("/history", guarded(this::handleHistory));
+        this.server.createContext("/stats", guarded(this::handleStats));
         this.server.setExecutor(Executors.newFixedThreadPool(2, runnable -> {
             Thread thread = new Thread(runnable, "gateway-http");
             thread.setDaemon(true);
@@ -149,6 +166,146 @@ public final class HealthApi implements AutoCloseable {
             return;
         }
         respond(exchange, 200, write(generator -> writeDevice(generator, found.get())));
+    }
+
+    /**
+     * {@code GET /history?device=<id>&from=<ms>&to=<ms>} — stored readings.
+     *
+     * <p>Reads from the store rather than the registry: the registry keeps
+     * only the latest reading per device, because holding a fleet's history in
+     * memory is what the store exists to avoid.
+     */
+    private void handleHistory(HttpExchange exchange) throws IOException {
+        if (rejectNonGet(exchange)) {
+            return;
+        }
+        Map<String, String> query = parseQuery(exchange.getRequestURI().getRawQuery());
+        String deviceId = query.get("device");
+        if (deviceId == null || deviceId.isBlank()) {
+            respond(exchange, 400, write(generator -> {
+                generator.writeStartObject();
+                generator.writeStringField("error", "device parameter is required");
+                generator.writeEndObject();
+            }));
+            return;
+        }
+        long to = parseLongOr(query.get("to"), System.currentTimeMillis());
+        long from = parseLongOr(query.get("from"), 0L);
+
+        try {
+            List<Telemetry> readings = store.history(deviceId, from, to);
+            respond(exchange, 200, write(generator -> {
+                generator.writeStartObject();
+                generator.writeStringField("deviceId", deviceId);
+                generator.writeNumberField("from", from);
+                generator.writeNumberField("to", to);
+                generator.writeNumberField("count", readings.size());
+                generator.writeArrayFieldStart("readings");
+                for (Telemetry reading : readings) {
+                    generator.writeStartObject();
+                    generator.writeNumberField("ts", reading.timestamp());
+                    generator.writeNumberField("temp", reading.temperature());
+                    generator.writeNumberField("vib", reading.vibration());
+                    generator.writeNumberField("batt", reading.batteryLevel());
+                    generator.writeStringField("status", reading.status().name());
+                    generator.writeEndObject();
+                }
+                generator.writeEndArray();
+                generator.writeEndObject();
+            }));
+        } catch (StoreException e) {
+            respondStoreFailure(exchange, e);
+        }
+    }
+
+    /** {@code GET /stats?from=<ms>&to=<ms>} — fleet aggregates over a window. */
+    private void handleStats(HttpExchange exchange) throws IOException {
+        if (rejectNonGet(exchange)) {
+            return;
+        }
+        Map<String, String> query = parseQuery(exchange.getRequestURI().getRawQuery());
+        long to = parseLongOr(query.get("to"), System.currentTimeMillis());
+        long from = parseLongOr(query.get("from"), to - DEFAULT_WINDOW_MILLIS);
+
+        try {
+            var averageTemperature = store.fleetAverageTemperature(from, to);
+            double rate = store.telemetryRate(from, to);
+            List<String> failed = store.currentlyFailedDevices();
+            var meanRecovery = store.meanRecoveryMillis(from, to);
+            int recoveries = store.recoveries(from, to).size();
+
+            respond(exchange, 200, write(generator -> {
+                generator.writeStartObject();
+                generator.writeNumberField("from", from);
+                generator.writeNumberField("to", to);
+                if (averageTemperature.isPresent()) {
+                    generator.writeNumberField("fleetAverageTemperature",
+                            averageTemperature.getAsDouble());
+                } else {
+                    generator.writeNullField("fleetAverageTemperature");
+                }
+                generator.writeNumberField("telemetryPerSecond", rate);
+                generator.writeNumberField("recoveries", recoveries);
+                if (meanRecovery.isPresent()) {
+                    generator.writeNumberField("meanRecoveryMillis", meanRecovery.getAsDouble());
+                } else {
+                    generator.writeNullField("meanRecoveryMillis");
+                }
+                generator.writeArrayFieldStart("currentlyFailed");
+                for (String deviceId : failed) {
+                    generator.writeString(deviceId);
+                }
+                generator.writeEndArray();
+                generator.writeEndObject();
+            }));
+        } catch (StoreException e) {
+            respondStoreFailure(exchange, e);
+        }
+    }
+
+    /**
+     * A store failure is reported as 503, not 500.
+     *
+     * <p>The gateway is still detecting failures; only the history is
+     * unavailable. Reporting it as a server error would suggest the whole
+     * component is down when the part that matters most is not.
+     */
+    private void respondStoreFailure(HttpExchange exchange, StoreException e) throws IOException {
+        System.err.println("store query failed: " + e.getMessage());
+        respond(exchange, 503, write(generator -> {
+            generator.writeStartObject();
+            generator.writeStringField("error", "telemetry store unavailable");
+            generator.writeStringField("detail", String.valueOf(e.getMessage()));
+            generator.writeEndObject();
+        }));
+    }
+
+    private static Map<String, String> parseQuery(String rawQuery) {
+        Map<String, String> parsed = new LinkedHashMap<>();
+        if (rawQuery == null || rawQuery.isBlank()) {
+            return parsed;
+        }
+        for (String pair : rawQuery.split("&")) {
+            int equals = pair.indexOf('=');
+            if (equals > 0) {
+                parsed.put(
+                        URLDecoder.decode(pair.substring(0, equals), StandardCharsets.UTF_8),
+                        URLDecoder.decode(pair.substring(equals + 1), StandardCharsets.UTF_8));
+            }
+        }
+        return parsed;
+    }
+
+    /** Falls back rather than failing: a malformed bound is not worth a 400. */
+    private static long parseLongOr(String raw, long fallback) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     private void writeDevice(JsonGenerator generator, DeviceRecord record) throws IOException {

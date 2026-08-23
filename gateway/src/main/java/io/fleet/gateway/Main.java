@@ -1,5 +1,12 @@
 package io.fleet.gateway;
 
+import io.fleet.common.StoreException;
+import io.fleet.common.TelemetryStore;
+import io.fleet.gateway.store.H2TelemetryStore;
+import io.fleet.gateway.store.NoOpTelemetryStore;
+import io.fleet.gateway.store.StoreConfig;
+import io.fleet.gateway.store.StoreMaintainer;
+
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -22,17 +29,19 @@ public final class Main {
         GatewayMetrics metrics = new GatewayMetrics();
         // One policy object, so the detector's rules have a single source.
         HealthPolicy policy = config.healthPolicy();
+        StoreConfig storeConfig = StoreConfig.fromEnv();
 
         printHeader(config);
 
         CountDownLatch stopped = new CountDownLatch(1);
         CountDownLatch finished = new CountDownLatch(1);
 
-        try (MqttIngestor ingestor = new MqttIngestor(config, registry, metrics, policy,
-                     java.time.Clock.systemUTC());
+        try (TelemetryStore store = openStore(storeConfig);
+             StoreMaintainer maintenance = new StoreMaintainer(store, storeConfig);
+             MqttIngestor ingestor = new MqttIngestor(config, registry, metrics, policy, store);
              HealthMonitor monitor = new HealthMonitor(registry, policy, metrics,
-                     ingestor, config.monitorIntervalMillis());
-             HealthApi api = new HealthApi(config, registry, metrics)) {
+                     ingestor, store, config.monitorIntervalMillis());
+             HealthApi api = new HealthApi(config, registry, metrics, store)) {
 
             // Closes the cycle described on MqttIngestor.onTransition: the
             // monitor announces what the ingestor observes, and publishes
@@ -41,6 +50,7 @@ public final class Main {
 
             ingestor.start();
             monitor.start();
+            maintenance.start();
             api.start();
             System.out.printf(Locale.ROOT, "health API on http://%s:%d/health%n",
                     config.httpHost(), api.port());
@@ -69,6 +79,22 @@ public final class Main {
         } finally {
             finished.countDown();
         }
+    }
+
+    /**
+     * Opens the configured store, or a null object when persistence is off.
+     *
+     * <p>The gateway detects failures with or without a store, so storage
+     * being unavailable must not stop it starting — but the operator has to
+     * know the history is not being kept.
+     */
+    private static TelemetryStore openStore(StoreConfig storeConfig) throws StoreException {
+        if (!storeConfig.enabled()) {
+            System.out.println("telemetry store disabled; history will not be kept");
+            return new NoOpTelemetryStore();
+        }
+        System.out.println("telemetry store at " + storeConfig.jdbcUrl());
+        return new H2TelemetryStore(storeConfig);
     }
 
     private static void printHeader(GatewayConfig config) {
@@ -107,6 +133,7 @@ public final class Main {
                 failures detected : %d
                 recoveries        : %d (mean %d ms)
                 monitor errors    : %d
+                store errors      : %d
                 telemetry accepted: %d
                 telemetry rejected: %d (malformed %d, invalid %d)
                 presence events   : %d
@@ -125,6 +152,7 @@ public final class Main {
                 metrics.recoveriesObservedCount(),
                 metrics.meanRecoveryMillis(),
                 metrics.monitorErrorCount(),
+                metrics.storeErrorCount(),
                 metrics.acceptedCount(),
                 metrics.rejectedCount(),
                 metrics.malformedCount(),
