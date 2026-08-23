@@ -105,8 +105,10 @@ public final class FleetHarness implements AutoCloseable {
     /** Snapshot of counters without stopping. */
     public FleetRunResult result() {
         long readings = 0L;
+        long heartbeats = 0L;
         for (EdgeDevice device : devices) {
             readings += device.readingsPublished();
+            heartbeats += device.heartbeatsPublished();
         }
         // Sorted because the backing set's iteration order varies between
         // otherwise identical runs, and a result field that does not reproduce
@@ -117,6 +119,7 @@ public final class FleetHarness implements AutoCloseable {
         return new FleetRunResult(
                 devices.size(),
                 readings,
+                heartbeats,
                 crashed,
                 sinkErrors.sum(),
                 unexpectedErrors.sum(),
@@ -164,7 +167,12 @@ public final class FleetHarness implements AutoCloseable {
         @Override
         public void run() {
             try {
-                device.publishReading(System.currentTimeMillis());
+                long now = System.currentTimeMillis();
+                // Heartbeat first: liveness should not depend on a reading
+                // succeeding, and a device that crashes mid-tick has already
+                // asserted it was alive when the tick began.
+                device.publishHeartbeat(now);
+                device.publishReading(now);
             } catch (DeviceCrashedException e) {
                 crashedDevices.add(device.deviceId());
                 cancelSelf();

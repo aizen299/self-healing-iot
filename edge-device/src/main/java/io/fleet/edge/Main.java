@@ -106,6 +106,7 @@ public final class Main {
                 === run summary ===
                 duration          : %d ms
                 readings published: %d
+                heartbeats sent   : %d
                 payloads delivered: %d
                 bytes delivered   : %s
                 throughput        : %.1f readings/s
@@ -119,6 +120,7 @@ public final class Main {
                 %n""",
                 result.durationMillis(),
                 result.readingsPublished(),
+                result.heartbeatsPublished(),
                 sinks.payloadCount(),
                 formatBytes(sinks.byteCount()),
                 result.throughputPerSecond(),

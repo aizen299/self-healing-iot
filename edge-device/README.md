@@ -83,9 +83,28 @@ crashed device produces the same broker-level signal a dead process would.
 Closing it cleanly instead would send a DISCONNECT, suppress the will, and
 leave the broker believing the device shut down on purpose.
 
-`HEARTBEAT_STOP` arrives with heartbeat monitoring in Phase 4. It is
-absent rather than stubbed, because a placeholder in core functionality is
-worse than a missing one.
+`HEARTBEAT_STOP` stops the liveness signal while the connection stays up
+and telemetry keeps flowing — a wedged heartbeat path rather than a dead
+device. It is the fault that justifies heartbeat monitoring existing: the
+broker never fires a Last Will, and a detector watching traffic would see a
+healthy device.
+
+## Heartbeats
+
+Every device publishes `{"deviceId":"…","ts":…}` to
+`fleet/{id}/heartbeat` on **the same tick as telemetry**, on the same
+thread and before it.
+
+Sharing the tick is deliberate. A separate heartbeat schedule would let two
+pool threads touch one device at once, and guarding against that would put
+a lock on the constrained variant's hot path — where it would show up in
+the Pillar A measurements.
+
+The consequence is that heartbeat rate equals `FLEET_PUBLISH_INTERVAL_MS`,
+so the gateway's `GATEWAY_HEARTBEAT_INTERVAL_MS` must be set to match.
+
+A crashed device stops heartbeating immediately rather than sending one
+last signal: a dead device must not go on asserting that it is alive.
 
 ## Running
 

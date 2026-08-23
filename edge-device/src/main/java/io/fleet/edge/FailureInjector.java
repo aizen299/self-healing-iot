@@ -41,6 +41,16 @@ public final class FailureInjector {
         return 1;
     }
 
+    /**
+     * Whether the device should still assert liveness.
+     *
+     * <p>Keyed on readings published, like every other injected fault, so the
+     * heartbeat stops at the same point on any host.
+     */
+    public boolean shouldSendHeartbeat(long readingsPublished) {
+        return mode != FailureMode.HEARTBEAT_STOP || readingsPublished < failAfterReadings;
+    }
+
     public FailureMode mode() {
         return mode;
     }

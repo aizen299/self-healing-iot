@@ -66,6 +66,30 @@ class VariantPayloadEqualityTest {
     }
 
     @Test
+    @DisplayName("both variants emit byte-identical heartbeats too")
+    void variantsProduceIdenticalHeartbeats() throws SinkException {
+        RecordingSink constrainedSink = new RecordingSink();
+        RecordingSink naiveSink = new RecordingSink();
+
+        EdgeDevice constrained = new ConstrainedEdgeDevice(
+                "device-001", sensorModel(), constrainedSink, noFailures());
+        EdgeDevice naive = new NaiveEdgeDevice(
+                "device-001", sensorModel(), naiveSink, noFailures());
+
+        for (int i = 0; i < 100; i++) {
+            long timestamp = BASE_TIMESTAMP + i * 1_000L;
+            constrained.publishHeartbeat(timestamp);
+            naive.publishHeartbeat(timestamp);
+        }
+
+        assertEquals(naiveSink.topics(), constrainedSink.topics(), "heartbeat topics must match");
+        assertEquals(naiveSink.payloads(), constrainedSink.payloads(),
+                "the liveness signal must be identical, or the two variants would be"
+                        + " measured against different detection behaviour");
+        assertEquals("fleet/device-001/heartbeat", constrainedSink.topics().get(0));
+    }
+
+    @Test
     @DisplayName("payload matches the documented wire format")
     void payloadMatchesDocumentedShape() throws SinkException {
         RecordingSink sink = new RecordingSink();

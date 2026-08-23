@@ -45,21 +45,35 @@ public final class ConstrainedEdgeDevice implements EdgeDevice {
     private static final byte[] STATUS = PayloadBuffer.ascii(",\"status\":\"");
     private static final byte[] TAIL = PayloadBuffer.ascii("\"}");
 
+    private static final byte[] HB_HEAD = PayloadBuffer.ascii("{\"deviceId\":\"");
+    private static final byte[] HB_TS = PayloadBuffer.ascii("\",\"ts\":");
+    private static final byte[] HB_TAIL = PayloadBuffer.ascii("}");
+
+    /** Ample for the heartbeat's fixed shape plus a bounded device id. */
+    static final int HEARTBEAT_CAPACITY = 128;
+
     private final String deviceId;
     private final byte[] deviceIdBytes;
     private final String topic;
+    private final String heartbeatTopic;
     private final SensorModel sensor;
     private final TelemetrySink sink;
     private final FailureInjector failures;
     private final PayloadBuffer payload = new PayloadBuffer(PAYLOAD_CAPACITY);
+    // A second buffer rather than sharing one: the two encodings would
+    // otherwise have to be interleaved carefully for no benefit, and both are
+    // allocated once per device at construction.
+    private final PayloadBuffer heartbeat = new PayloadBuffer(HEARTBEAT_CAPACITY);
 
     private long readingsPublished;
+    private long heartbeatsPublished;
 
     public ConstrainedEdgeDevice(
             String deviceId, SensorModel sensor, TelemetrySink sink, FailureInjector failures) {
         this.deviceId = deviceId;
         this.deviceIdBytes = PayloadBuffer.ascii(deviceId);
         this.topic = Topics.telemetry(deviceId);
+        this.heartbeatTopic = Topics.heartbeat(deviceId);
         this.sensor = sensor;
         this.sink = sink;
         this.failures = failures;
@@ -107,7 +121,30 @@ public final class ConstrainedEdgeDevice implements EdgeDevice {
     }
 
     @Override
+    public void publishHeartbeat(long nowMillis) throws SinkException {
+        if (failures.shouldCrash(readingsPublished)) {
+            throw new DeviceCrashedException(deviceId, readingsPublished);
+        }
+        if (!failures.shouldSendHeartbeat(readingsPublished)) {
+            return;
+        }
+        heartbeat.reset()
+                .raw(HB_HEAD)
+                .raw(deviceIdBytes)
+                .raw(HB_TS)
+                .number(nowMillis)
+                .raw(HB_TAIL);
+        sink.publish(heartbeatTopic, heartbeat.array(), 0, heartbeat.length());
+        heartbeatsPublished++;
+    }
+
+    @Override
     public long readingsPublished() {
         return readingsPublished;
+    }
+
+    @Override
+    public long heartbeatsPublished() {
+        return heartbeatsPublished;
     }
 }

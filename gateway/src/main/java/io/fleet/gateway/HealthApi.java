@@ -9,6 +9,7 @@ import io.fleet.common.Telemetry;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -74,6 +75,24 @@ public final class HealthApi implements AutoCloseable {
             generator.writeNumberField("devicesKnown", registry.size());
             generator.writeNumberField("devicesReporting", registry.reportingCount());
             generator.writeNumberField("devicesOnline", registry.onlineCount());
+            // The gateway's own judgement, as opposed to what the broker and
+            // the devices report. This is what recovery acts on.
+            generator.writeObjectFieldStart("health");
+            registry.healthCounts().forEach((state, count) -> {
+                try {
+                    generator.writeNumberField(state.name(), count);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+            generator.writeEndObject();
+            generator.writeNumberField("heartbeatsAccepted", metrics.heartbeatsAcceptedCount());
+            generator.writeNumberField("heartbeatsMalformed", metrics.heartbeatsMalformedCount());
+            generator.writeNumberField("failuresDetected", metrics.failuresDetectedCount());
+            generator.writeNumberField("recoveriesObserved", metrics.recoveriesObservedCount());
+            generator.writeNumberField("meanRecoveryMillis", metrics.meanRecoveryMillis());
+            generator.writeNumberField("monitorErrors", metrics.monitorErrorCount());
+            generator.writeNumberField("eventPublishFailures", metrics.eventPublishFailureCount());
             generator.writeNumberField("telemetryAccepted", metrics.acceptedCount());
             generator.writeNumberField("telemetryMalformed", metrics.malformedCount());
             generator.writeNumberField("telemetryInvalid", metrics.invalidCount());
@@ -140,6 +159,10 @@ public final class HealthApi implements AutoCloseable {
     private void writeDevice(JsonGenerator generator, DeviceRecord record) throws IOException {
         generator.writeStartObject();
         generator.writeStringField("deviceId", record.deviceId());
+        generator.writeStringField("health", record.health().name());
+        generator.writeNumberField("healthChangedAtMillis", record.healthChangedAtMillis());
+        generator.writeNumberField("offlineSinceMillis", record.offlineSinceMillis());
+        generator.writeNumberField("lastHeartbeatAtMillis", record.lastHeartbeatAtMillis());
         if (record.presence() == null) {
             generator.writeNullField("presence");
         } else {

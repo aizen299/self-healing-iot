@@ -13,8 +13,8 @@ the client, QoS, and presence semantics is in
 |---|---|---|---|---|
 | `fleet/{deviceId}/telemetry` | device → broker | 0 | no | **live** |
 | `fleet/{deviceId}/status` | device → broker | 1 | **yes** | **live** |
-| `fleet/{deviceId}/heartbeat` | device → broker | — | — | Phase 4 |
-| `fleet/{deviceId}/events` | device → broker | — | — | Phase 4 |
+| `fleet/{deviceId}/heartbeat` | device → broker | 0 | no | **live** |
+| `fleet/{deviceId}/events` | **gateway** → broker | 1 | no | **live** |
 
 `{deviceId}` matches the ids the simulator generates, e.g. `device-001`.
 Constants live in `io.fleet.common.Topics` so no module builds a topic
@@ -82,11 +82,52 @@ currently exists — only that it did once. The gateway must reconcile
 retained presence against its own device registry rather than trusting it
 as a fleet inventory.
 
+## `fleet/{deviceId}/heartbeat`
+
+Liveness only. `{"deviceId":"device-001","ts":1787484895182}`
+
+Rides the same tick as telemetry, so its rate equals the fleet's publish
+interval — the gateway's `GATEWAY_HEARTBEAT_INTERVAL_MS` must match it.
+
+The timestamp is the device's own clock and is for diagnosis only. Timeout
+detection uses the gateway's receipt time: a wedged device may be wrong
+about the time, and a clock that jumps forward must not buy a reprieve.
+
+**Telemetry is not a substitute.** A device whose heartbeat path has wedged
+while its publisher keeps running is the fault heartbeat monitoring exists
+to catch, so the gateway deliberately does not treat readings as liveness.
+
+## `fleet/{deviceId}/events`
+
+Published by the **gateway**, not the device — the only topic in the system
+that flows that direction. Health transitions the rest of the system must
+act on:
+
+```json
+{"deviceId":"demo4-001","event":"DEVICE_OFFLINE","from":"SUSPECTED","to":"OFFLINE","at":1787499482844,"missedHeartbeats":4,"recoveryDurationMillis":-1}
+```
+
+| Event | Meaning |
+|---|---|
+| `DEVICE_OFFLINE` | Declared failed. Phase 9's recovery reacts to this. |
+| `DEVICE_RECOVERING` | Failed device is heartbeating again, on probation. |
+| `DEVICE_RECOVERED` | Back in service; `recoveryDurationMillis` is meaningful. |
+
+QoS 1 because recovery depends on these, and **not retained**: an event is
+a moment rather than a state, and retaining it would replay old failures to
+every new subscriber.
+
+`ONLINE → SUSPECTED` is deliberately absent. Suspicion is the detector
+hedging against a lost QoS 0 message; publishing it would invite consumers
+to react to what is explicitly not yet a failure. See
+[ADR-006](../decisions/ADR-006-failure-detection.md).
+
 ## Observing the fleet
 
 ```bash
 mosquitto_sub -h 127.0.0.1 -t 'fleet/+/telemetry' -v
 mosquitto_sub -h 127.0.0.1 -t 'fleet/+/status' -v
+mosquitto_sub -h 127.0.0.1 -t 'fleet/+/events' -v
 ```
 
 Clear a stale retained presence entry by publishing an empty retained

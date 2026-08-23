@@ -12,6 +12,7 @@ import java.util.List;
  *
  * @param deviceCount      devices started
  * @param readingsPublished readings the devices report having published
+ * @param heartbeatsPublished heartbeats the devices report having published
  * @param crashedDevices   ids of devices that died via injected CRASH
  * @param sinkErrors       publishes the sink rejected
  * @param unexpectedErrors errors that were neither a crash nor a sink failure
@@ -20,6 +21,7 @@ import java.util.List;
 public record FleetRunResult(
         int deviceCount,
         long readingsPublished,
+        long heartbeatsPublished,
         List<String> crashedDevices,
         long sinkErrors,
         long unexpectedErrors,
