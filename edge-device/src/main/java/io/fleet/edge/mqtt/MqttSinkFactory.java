@@ -4,8 +4,8 @@ import io.fleet.common.SinkException;
 import io.fleet.common.TelemetrySink;
 import io.fleet.common.TelemetrySinkFactory;
 
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -20,9 +20,10 @@ public final class MqttSinkFactory implements TelemetrySinkFactory {
     private final long interruptAfterPublishes;
     private final long interruptDurationMillis;
 
-    private final List<MqttTelemetrySink> created = new CopyOnWriteArrayList<>();
+    private final Map<String, MqttTelemetrySink> created = new ConcurrentHashMap<>();
     private final LongAdder payloads = new LongAdder();
     private final LongAdder bytes = new LongAdder();
+    private final LongAdder connectionLosses = new LongAdder();
 
     public MqttSinkFactory(MqttConfig config) {
         this(config, 0L, 0L);
@@ -44,13 +45,22 @@ public final class MqttSinkFactory implements TelemetrySinkFactory {
     public TelemetrySink create(String deviceId) throws SinkException {
         MqttTelemetrySink sink = new MqttTelemetrySink(
                 deviceId, config, interruptAfterPublishes, interruptDurationMillis,
-                payloads, bytes);
+                payloads, bytes, connectionLosses);
         // Registered before connecting so a partially built fleet still gets
         // torn down: without this, a broker that refuses the tenth connection
         // would strand the nine already established.
-        created.add(sink);
+        created.put(deviceId, sink);
         sink.connect();
         return sink;
+    }
+
+    /** Drops a dead device's connection ungracefully, so the broker fires its will. */
+    @Override
+    public void abandon(String deviceId) throws SinkException {
+        MqttTelemetrySink sink = created.remove(deviceId);
+        if (sink != null) {
+            sink.abort();
+        }
     }
 
     @Override
@@ -63,11 +73,16 @@ public final class MqttSinkFactory implements TelemetrySinkFactory {
         return bytes.sum();
     }
 
+    @Override
+    public long connectionLosses() {
+        return connectionLosses.sum();
+    }
+
     /** Closes every sink, reporting the first failure only after trying them all. */
     @Override
     public void close() throws SinkException {
         SinkException firstFailure = null;
-        for (MqttTelemetrySink sink : created) {
+        for (MqttTelemetrySink sink : created.values()) {
             try {
                 sink.close();
             } catch (SinkException e) {

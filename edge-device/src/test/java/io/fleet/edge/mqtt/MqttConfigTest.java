@@ -38,6 +38,15 @@ class MqttConfigTest {
     }
 
     @Test
+    void rejectsABrokerUrlWithNoPort() {
+        // Left to Paho this surfaces as a generic connect failure, pointing at
+        // the broker rather than at the variable that was mistyped.
+        ConfigurationException error = assertThrows(ConfigurationException.class,
+                () -> MqttConfig.from(Map.of("MQTT_BROKER_URL", "tcp://broker.local")));
+        assertTrue(error.getMessage().contains("port"), error.getMessage());
+    }
+
+    @Test
     void rejectsAnOutOfRangeQos() {
         assertThrows(ConfigurationException.class,
                 () -> MqttConfig.from(Map.of("MQTT_QOS", "3")));

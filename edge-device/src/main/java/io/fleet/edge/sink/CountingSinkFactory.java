@@ -22,6 +22,11 @@ public final class CountingSinkFactory implements TelemetrySinkFactory {
     }
 
     @Override
+    public void abandon(String deviceId) {
+        // Nothing to release: the sink is shared and holds no connection.
+    }
+
+    @Override
     public long payloadCount() {
         return sink.payloadCount();
     }

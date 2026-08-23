@@ -28,6 +28,10 @@ public enum FailureMode {
      * connection is dropped without a DISCONNECT so the broker fires the
      * device's Last Will, exactly as a severed link would. Requires the MQTT
      * sink — a network fault with no network is not a scenario.
+     *
+     * <p>Fires <strong>once per device per run</strong>, not periodically:
+     * this models a single deterministic outage that the device then recovers
+     * from, so a long run does not keep interrupting itself.
      */
     NETWORK_INTERRUPTION;
 

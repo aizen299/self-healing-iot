@@ -24,11 +24,34 @@ public interface TelemetrySinkFactory extends AutoCloseable {
      */
     TelemetrySink create(String deviceId) throws SinkException;
 
+    /**
+     * Releases the sink for a device that has died, <em>without</em> a
+     * graceful goodbye.
+     *
+     * <p>Distinct from {@link #close()} on purpose. A clean disconnect tells
+     * the broker to suppress the Last Will, which is right for an orderly
+     * shutdown and wrong for a crash: a device that loses power never gets to
+     * say anything, and the will is the whole failure signal. Implementations
+     * backed by a connection must drop it the way a dead process would.
+     *
+     * <p>No-op for transports with no per-device state.
+     */
+    void abandon(String deviceId) throws SinkException;
+
     /** Payloads accepted across every sink this factory produced. */
     long payloadCount();
 
     /** Bytes accepted across every sink this factory produced. */
     long byteCount();
+
+    /**
+     * Unexpected connection losses the transport observed — a broker restart
+     * or a real network fault, as opposed to an injected one. Zero for
+     * transports that hold no connection.
+     */
+    default long connectionLosses() {
+        return 0L;
+    }
 
     @Override
     void close() throws SinkException;

@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.LongAdder;
 public final class FleetHarness implements AutoCloseable {
 
     private final DeviceConfig config;
+    private final TelemetrySinkFactory sinks;
     private final List<EdgeDevice> devices;
     private final ScheduledExecutorService scheduler;
 
@@ -45,6 +46,7 @@ public final class FleetHarness implements AutoCloseable {
 
     public FleetHarness(DeviceConfig config, TelemetrySinkFactory sinks) throws SinkException {
         this.config = config;
+        this.sinks = sinks;
         this.devices = DeviceFactory.createFleet(config, sinks);
         int threads = config.variant().threadCount(config.deviceCount());
         this.scheduler = Executors.newScheduledThreadPool(threads, namedThreads());
@@ -166,6 +168,7 @@ public final class FleetHarness implements AutoCloseable {
             } catch (DeviceCrashedException e) {
                 crashedDevices.add(device.deviceId());
                 cancelSelf();
+                abandonSink();
             } catch (SinkException e) {
                 sinkErrors.increment();
                 System.err.println("sink rejected payload from " + device.deviceId()
@@ -180,6 +183,25 @@ public final class FleetHarness implements AutoCloseable {
             ScheduledFuture<?> scheduled = future;
             if (scheduled != null) {
                 scheduled.cancel(false);
+            }
+        }
+
+        /**
+         * Releases the dead device's transport ungracefully.
+         *
+         * <p>Without this a crashed device keeps its broker connection open
+         * for the rest of the run, so the broker still reports it ONLINE and
+         * eventually sees a clean disconnect at shutdown — meaning the most
+         * basic failure mode would produce no failure signal at all for
+         * Phase 4 to detect.
+         */
+        private void abandonSink() {
+            try {
+                sinks.abandon(device.deviceId());
+            } catch (SinkException e) {
+                sinkErrors.increment();
+                System.err.println("could not release the connection of crashed device "
+                        + device.deviceId() + ": " + e.getMessage());
             }
         }
     }

@@ -62,6 +62,7 @@ MQTT settings apply only when `FLEET_SINK=MQTT`:
 | `MQTT_QOS` | `0` (telemetry; presence is always QoS 1) |
 | `MQTT_KEEPALIVE_SECONDS` | `60` |
 | `MQTT_CONNECTION_TIMEOUT_SECONDS` | `10` |
+| `MQTT_OPERATION_TIMEOUT_SECONDS` | `10` (ceiling on any blocking client call) |
 | `MQTT_CLEAN_SESSION` | `true` |
 | `MQTT_AUTOMATIC_RECONNECT` | `true` |
 | `MQTT_RETAINED_STATUS` | `true` |
@@ -72,9 +73,15 @@ failure fires at the same point regardless of host speed.
 `NETWORK_INTERRUPTION` drops the connection *without* a DISCONNECT packet,
 so the broker fires the device's Last Will exactly as a severed link would
 — it is handled in the MQTT sink rather than in device logic, because the
-fault is in the transport. It requires `FLEET_SINK=MQTT`; configuring it
-against the counting sink is rejected at startup rather than silently
-doing nothing.
+fault is in the transport. It fires **once per device per run**, modelling
+a single deterministic outage the device then recovers from. It requires
+`FLEET_SINK=MQTT`; configuring it against the counting sink is rejected at
+startup rather than silently doing nothing.
+
+`CRASH` also drops the connection ungracefully when running on MQTT, so a
+crashed device produces the same broker-level signal a dead process would.
+Closing it cleanly instead would send a DISCONNECT, suppress the will, and
+leave the broker believing the device shut down on purpose.
 
 `HEARTBEAT_STOP` arrives with heartbeat monitoring in Phase 4. It is
 absent rather than stubbed, because a placeholder in core functionality is
