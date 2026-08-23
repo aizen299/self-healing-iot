@@ -2,6 +2,8 @@ package io.fleet.edge.mqtt;
 
 import io.fleet.edge.ConfigurationException;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Map;
 
 /**
@@ -13,6 +15,7 @@ import java.util.Map;
  * @param qos                       quality of service for telemetry (see ADR-004)
  * @param keepAliveSeconds          MQTT keep-alive interval
  * @param connectionTimeoutSeconds  how long a connect attempt may take
+ * @param operationTimeoutSeconds   ceiling on any blocking client call
  * @param cleanSession              whether the broker discards session state on disconnect
  * @param automaticReconnect        whether Paho reconnects after an unexpected drop
  * @param publishRetainedStatus     whether to publish retained ONLINE/OFFLINE presence
@@ -23,6 +26,7 @@ public record MqttConfig(
         int qos,
         int keepAliveSeconds,
         int connectionTimeoutSeconds,
+        int operationTimeoutSeconds,
         boolean cleanSession,
         boolean automaticReconnect,
         boolean publishRetainedStatus) {
@@ -34,6 +38,25 @@ public record MqttConfig(
         if (!brokerUrl.startsWith("tcp://") && !brokerUrl.startsWith("ssl://")) {
             throw new ConfigurationException(
                     "MQTT_BROKER_URL must start with tcp:// or ssl://, got '" + brokerUrl + "'");
+        }
+        // Checked here rather than left to Paho: a missing port surfaces from
+        // the client as a generic connect failure, which points the operator
+        // at the broker instead of at the variable they mistyped.
+        URI parsed;
+        try {
+            parsed = new URI(brokerUrl);
+        } catch (URISyntaxException e) {
+            throw new ConfigurationException(
+                    "MQTT_BROKER_URL is not a valid URI: '" + brokerUrl + "'", e);
+        }
+        if (parsed.getHost() == null || parsed.getHost().isBlank()) {
+            throw new ConfigurationException(
+                    "MQTT_BROKER_URL has no host: '" + brokerUrl + "'");
+        }
+        if (parsed.getPort() < 1) {
+            throw new ConfigurationException(
+                    "MQTT_BROKER_URL must include a port, e.g. tcp://host:1883, got '"
+                            + brokerUrl + "'");
         }
         if (clientIdPrefix == null || clientIdPrefix.isBlank()) {
             throw new ConfigurationException("MQTT_CLIENT_ID_PREFIX must not be blank");
@@ -49,6 +72,10 @@ public record MqttConfig(
             throw new ConfigurationException(
                     "MQTT_CONNECTION_TIMEOUT_SECONDS must be >= 1, got " + connectionTimeoutSeconds);
         }
+        if (operationTimeoutSeconds < 1) {
+            throw new ConfigurationException(
+                    "MQTT_OPERATION_TIMEOUT_SECONDS must be >= 1, got " + operationTimeoutSeconds);
+        }
     }
 
     public static MqttConfig fromEnv() {
@@ -62,6 +89,7 @@ public record MqttConfig(
                 parseInt(env, "MQTT_QOS", 0),
                 parseInt(env, "MQTT_KEEPALIVE_SECONDS", 60),
                 parseInt(env, "MQTT_CONNECTION_TIMEOUT_SECONDS", 10),
+                parseInt(env, "MQTT_OPERATION_TIMEOUT_SECONDS", 10),
                 parseBoolean(env, "MQTT_CLEAN_SESSION", true),
                 parseBoolean(env, "MQTT_AUTOMATIC_RECONNECT", true),
                 parseBoolean(env, "MQTT_RETAINED_STATUS", true));

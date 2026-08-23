@@ -64,7 +64,7 @@ signal trustworthy:
 | Event | Publisher | Payload |
 |---|---|---|
 | Device connects | device | `ONLINE` |
-| Device disconnects ungracefully | **broker**, via Last Will | `OFFLINE` |
+| Device crashes or loses its network | **broker**, via Last Will | `OFFLINE` |
 | Device shuts down cleanly | device, then a real DISCONNECT | `OFFLINE` |
 
 A clean shutdown sends a DISCONNECT packet, which suppresses the will.

@@ -112,6 +112,7 @@ public final class Main {
                 crashed devices   : %d%s
                 sink errors       : %d
                 unexpected errors : %d
+                connection losses : %d
                 gc collections    : %d
                 gc time           : %d ms
                 heap in use       : %s
@@ -125,6 +126,7 @@ public final class Main {
                 result.crashedDevices().isEmpty() ? "" : " " + result.crashedDevices(),
                 result.sinkErrors(),
                 result.unexpectedErrors(),
+                sinks.connectionLosses(),
                 delta.collections(),
                 delta.collectionTimeMillis(),
                 formatBytes(delta.heapUsedBytes()));

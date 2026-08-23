@@ -4,6 +4,8 @@ import io.fleet.common.Presence;
 import io.fleet.common.SinkException;
 import io.fleet.common.TelemetrySink;
 import io.fleet.common.Topics;
+import io.fleet.edge.DeviceConfig;
+import io.fleet.edge.harness.FleetHarness;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttCallback;
 import org.eclipse.paho.client.mqttv3.MqttClient;
@@ -27,6 +29,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -127,7 +130,9 @@ class MqttTelemetrySinkTest {
     void networkInterruptionFiresTheWillAndReconnects() throws Exception {
         subscriber.subscribe(Topics.status(deviceId));
 
-        try (MqttSinkFactory factory = new MqttSinkFactory(config, 1L, 300L)) {
+        long outageMillis = 3_000L;
+
+        try (MqttSinkFactory factory = new MqttSinkFactory(config, 1L, outageMillis)) {
             TelemetrySink sink = factory.create(deviceId);
             assertEquals(Presence.ONLINE.name(), subscriber.next());
 
@@ -136,19 +141,74 @@ class MqttTelemetrySinkTest {
 
             // The second publish trips the interruption: the connection drops
             // without a DISCONNECT, so the broker must publish the will.
+            long interruptedAt = System.currentTimeMillis();
             assertThrows(SinkException.class,
                     () -> sink.publish(Topics.telemetry(deviceId), payload, 0, payload.length));
             assertEquals(Presence.OFFLINE.name(), subscriber.next(),
                     "an ungraceful drop must fire the Last Will");
 
-            // Still inside the outage window: publishing fails loudly.
-            assertThrows(SinkException.class,
-                    () -> sink.publish(Topics.telemetry(deviceId), payload, 0, payload.length));
+            // Guarded rather than assumed: observing the will costs real time,
+            // and asserting "still offline" after the window had elapsed would
+            // fail on a slow broker for no good reason.
+            if (System.currentTimeMillis() - interruptedAt < outageMillis) {
+                assertThrows(SinkException.class,
+                        () -> sink.publish(Topics.telemetry(deviceId), payload, 0, payload.length));
+            }
 
-            Thread.sleep(400L);
+            long remaining = outageMillis - (System.currentTimeMillis() - interruptedAt);
+            if (remaining > 0) {
+                Thread.sleep(remaining + 200L);
+            }
             sink.publish(Topics.telemetry(deviceId), payload, 0, payload.length);
             assertEquals(Presence.ONLINE.name(), subscriber.next(),
                     "the device must announce itself again after recovering");
+        }
+    }
+
+    @Test
+    @DisplayName("abandoning a sink drops the connection so the broker fires the will")
+    void abandonFiresTheWill() throws Exception {
+        subscriber.subscribe(Topics.status(deviceId));
+
+        try (MqttSinkFactory factory = new MqttSinkFactory(config)) {
+            factory.create(deviceId);
+            assertEquals(Presence.ONLINE.name(), subscriber.next());
+
+            factory.abandon(deviceId);
+
+            assertEquals(Presence.OFFLINE.name(), subscriber.next(),
+                    "abandon must not send a DISCONNECT, or the will is suppressed");
+        }
+    }
+
+    @Test
+    @DisplayName("a crashed device's connection is dropped, not closed cleanly")
+    void crashedDeviceFiresTheWillImmediately() throws Exception {
+        String prefix = "crashtest" + System.nanoTime();
+        String statusTopic = Topics.status(prefix + "-001");
+        subscriber.subscribe(statusTopic);
+
+        DeviceConfig fleetConfig = DeviceConfig.from(Map.of(
+                "FLEET_SINK", "mqtt",
+                "FLEET_DEVICE_COUNT", "1",
+                "FLEET_DEVICE_ID_PREFIX", prefix,
+                "FLEET_PUBLISH_INTERVAL_MS", "50",
+                "FLEET_FAILURE_MODE", "CRASH",
+                "FLEET_FAIL_AFTER", "2"));
+
+        try (MqttSinkFactory factory = new MqttSinkFactory(config);
+             FleetHarness harness = new FleetHarness(fleetConfig, factory)) {
+
+            harness.start();
+            assertEquals(Presence.ONLINE.name(), subscriber.next());
+            // Before the fix this OFFLINE only arrived at shutdown, via a clean
+            // disconnect — so the broker never learned the device had died.
+            assertEquals(Presence.OFFLINE.name(), subscriber.next(),
+                    "a crash must drop the connection promptly, not at end of run");
+            assertFalse(harness.result().crashedDevices().isEmpty(),
+                    "the harness should also have recorded the crash");
+        } finally {
+            subscriber.clearRetained(statusTopic);
         }
     }
 
@@ -169,8 +229,17 @@ class MqttTelemetrySinkTest {
         }
     }
 
+    /**
+     * True when a broker answers. A misconfigured URL is a failure, not a
+     * skip — otherwise a typo in MQTT_BROKER_URL turns the whole MQTT suite
+     * into a green no-op that reads exactly like the expected local case.
+     */
     private static boolean brokerReachable() {
         URI uri = URI.create(BROKER);
+        if (uri.getHost() == null || uri.getPort() < 1) {
+            throw new IllegalStateException(
+                    "MQTT_BROKER_URL is malformed, so these tests cannot run: '" + BROKER + "'");
+        }
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(uri.getHost(), uri.getPort()), 500);
             return true;
@@ -184,6 +253,7 @@ class MqttTelemetrySinkTest {
 
         private final MqttClient client;
         private final BlockingQueue<String> received = new LinkedBlockingQueue<>();
+        private volatile Throwable lostCause;
 
         Subscriber() throws MqttException {
             client = new MqttClient(
@@ -200,6 +270,13 @@ class MqttTelemetrySinkTest {
 
         String next() throws InterruptedException {
             String message = received.poll(AWAIT_SECONDS, TimeUnit.SECONDS);
+            if (message == null && lostCause != null) {
+                // Without this the failure reads as a timeout on the sink under
+                // test, when the real cause is that this subscriber's own
+                // connection died.
+                throw new AssertionError(
+                        "the test subscriber lost its broker connection", lostCause);
+            }
             assertNotNull(message, "no message received within " + AWAIT_SECONDS + "s");
             return message;
         }
@@ -218,7 +295,9 @@ class MqttTelemetrySinkTest {
 
         @Override
         public void connectionLost(Throwable cause) {
-            // Nothing to do; the test asserts on messages, not on the subscriber's link.
+            // Recorded, not discarded: a dropped subscriber would otherwise
+            // surface only as an unexplained timeout in next().
+            lostCause = cause;
         }
 
         @Override
