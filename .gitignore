@@ -1,0 +1,48 @@
+# Build outputs
+target/
+build/
+out/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Maven
+.mvn/wrapper/maven-wrapper.properties.bak
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Env / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# JVM crash / profiling artifacts
+hs_err_pid*.log
+*.hprof
+
+# Kubernetes local state
+infrastructure/kubernetes/**/*.local.yaml
+
+# NOTE: experiments/results/ is intentionally NOT ignored.
+# Raw and processed experiment data must be committed for reproducibility.
