@@ -31,9 +31,9 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phase 1 complete — Java edge simulator.** `common/` and `edge-device/`
-are implemented and tested; the other modules are still README-only
-scaffolding stating their target phase.
+**Phases 1–2 complete — edge simulator publishing over MQTT.** `common/`
+and `edge-device/` are implemented and tested; the other modules are
+still README-only scaffolding stating their target phase.
 
 Build is **Maven** (no Gradle). The JVM is pinned to HotSpot OpenJDK 21
 by ADR-002 and enforced by `maven-enforcer-plugin` — the build fails on
@@ -54,8 +54,22 @@ FLEET_VARIANT=constrained FLEET_DEVICE_COUNT=50 \
 ```
 
 Fleet scope is 50 devices and the simulation model is hybrid — see
-ADR-003. There is no MQTT yet; devices publish through a `TelemetrySink`
-seam that Phase 2 implements against.
+ADR-003.
+
+Telemetry goes wherever `FLEET_SINK` says. It defaults to `COUNTING`
+(no broker required) because Pillar A must measure telemetry production
+rather than the MQTT client. `FLEET_SINK=mqtt` publishes to a real
+broker, one connection per device — a Last Will belongs to a connection,
+so sharing one would leave the broker unable to name which device died
+(ADR-004). Start a local broker with:
+
+```bash
+/opt/homebrew/opt/mosquitto/sbin/mosquitto -p 1883
+```
+
+MQTT integration tests skip themselves when no broker is listening, so
+`mvn test` stays green without one — but Phase 2 work should be verified
+with a broker running. The wire contract is `docs/api/mqtt-topics.md`.
 
 ## Development phases — strict build order
 

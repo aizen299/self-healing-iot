@@ -76,15 +76,20 @@ and current implementation status.
 
 ## Status
 
-**Phase 1 complete — Java edge simulator.** `common/` and `edge-device/`
-are implemented, tested, and runnable; 40 unit tests pass. The remaining
-modules are still scaffolding.
+**Phases 1–2 complete — edge simulator publishing over MQTT.** `common/`
+and `edge-device/` are implemented, tested, and runnable; 58 tests pass.
+The remaining modules are still scaffolding.
 
 The simulator runs a fleet of 50 devices in two variants — a
 resource-disciplined one and a conventional baseline — producing an
 identical deterministic workload and byte-identical payloads, which is
-what makes Pillar A a fair comparison. There is no MQTT yet; devices
-publish through a `TelemetrySink` seam that Phase 2 implements against.
+what makes Pillar A a fair comparison.
+
+Devices publish real telemetry to Mosquitto, each over its own connection
+so the broker's Last Will identifies an individual device rather than the
+fleet. That per-device presence signal on `fleet/{id}/status` is what
+Phase 4's failure detection will consume; the wire contract is in
+[`docs/api/mqtt-topics.md`](docs/api/mqtt-topics.md).
 
 ## Development phases
 
@@ -93,7 +98,7 @@ working, tested demonstration. This numbering is canonical and matches
 `CLAUDE.md`:
 
 - [x] Phase 1 — Java edge simulator
-- [ ] Phase 2 — MQTT communication
+- [x] Phase 2 — MQTT communication
 - [ ] Phase 3 — Java gateway
 - [ ] Phase 4 — Heartbeat / failure detection
 - [ ] Phase 5 — Persistent telemetry
@@ -161,6 +166,22 @@ FLEET_VARIANT=constrained FLEET_DEVICE_COUNT=50 FLEET_RUN_DURATION_SECONDS=10 \
 Swap `FLEET_VARIANT=naive` for the baseline, or inject a deterministic
 failure with `FLEET_FAILURE_MODE=CRASH FLEET_FAIL_AFTER=10`. All
 variables are documented in `edge-device/README.md`.
+
+To publish to a real broker instead, start Mosquitto and set
+`FLEET_SINK=mqtt` (the Paho jar must be on the classpath — see
+`edge-device/README.md`):
+
+```bash
+/opt/homebrew/opt/mosquitto/sbin/mosquitto -p 1883
+```
+
+```bash
+mosquitto_sub -h 127.0.0.1 -t 'fleet/+/telemetry' -v
+```
+
+The counting sink remains the default because Pillar A must measure
+telemetry *production*, not the MQTT client — and because tests and quick
+runs should not need a broker.
 
 The run summary is a **demonstration, not a result** — figures count only
 when produced by a run recorded under `experiments/results/` with its

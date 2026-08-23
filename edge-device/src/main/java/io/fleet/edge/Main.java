@@ -1,19 +1,22 @@
 package io.fleet.edge;
 
+import io.fleet.common.SinkException;
+import io.fleet.common.TelemetrySinkFactory;
 import io.fleet.edge.harness.FleetHarness;
 import io.fleet.edge.harness.FleetRunResult;
 import io.fleet.edge.metrics.GcSnapshot;
-import io.fleet.edge.sink.CountingSink;
+import io.fleet.edge.mqtt.MqttConfig;
+import io.fleet.edge.mqtt.MqttSinkFactory;
+import io.fleet.edge.sink.CountingSinkFactory;
 
 import java.util.Locale;
 
 /**
  * Runs a simulated fleet for a fixed duration and prints a summary.
  *
- * <p>Phase 1 has no broker: telemetry goes to a counting sink so the run
- * measures the cost of producing telemetry, not of transporting it. Phase 2
- * swaps in an MQTT sink behind {@code TelemetrySink} without changing any
- * device code.
+ * <p>Telemetry goes wherever {@code FLEET_SINK} says. The default counting
+ * sink needs no broker and keeps transport cost out of the numbers; the MQTT
+ * sink publishes to a real broker with one connection per device.
  *
  * <p>The printed figures are a demonstration, not a result. Nothing here may
  * be quoted in documentation or the report unless it came from a run recorded
@@ -21,18 +24,19 @@ import java.util.Locale;
  */
 public final class Main {
 
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) throws InterruptedException, SinkException {
         DeviceConfig config = DeviceConfig.fromEnv();
+        MqttConfig mqttConfig = config.sink() == SinkType.MQTT ? MqttConfig.fromEnv() : null;
 
-        printHeader(config);
+        printHeader(config, mqttConfig);
 
-        // Declared in this order so the harness closes first and the sink
-        // second: devices must stop publishing before the transport that
-        // carries their payloads is released. From Phase 2 the sink holds a
-        // broker connection, and skipping its close would drop the session
-        // without a DISCONNECT.
-        try (CountingSink sink = new CountingSink();
-             FleetHarness harness = new FleetHarness(config, sink)) {
+        // Declared in this order so the harness closes first and the sinks
+        // second: devices must stop publishing before their connections are
+        // released, and each MQTT connection needs a proper DISCONNECT so the
+        // broker does not fire the device's Last Will on an orderly shutdown.
+        try (TelemetrySinkFactory sinks = createSinkFactory(config, mqttConfig);
+             FleetHarness harness = new FleetHarness(config, sinks)) {
+
             Runtime.getRuntime().addShutdownHook(new Thread(harness::close, "fleet-shutdown"));
 
             GcSnapshot before = GcSnapshot.capture();
@@ -41,14 +45,26 @@ public final class Main {
             FleetRunResult result = harness.stop();
             GcSnapshot delta = GcSnapshot.capture().since(before);
 
-            printSummary(result, sink, delta);
+            printSummary(result, sinks, delta);
         }
     }
 
-    private static void printHeader(DeviceConfig config) {
+    private static TelemetrySinkFactory createSinkFactory(DeviceConfig config, MqttConfig mqtt) {
+        return switch (config.sink()) {
+            case COUNTING -> new CountingSinkFactory();
+            case MQTT -> new MqttSinkFactory(
+                    mqtt,
+                    config.failureMode() == FailureMode.NETWORK_INTERRUPTION
+                            ? config.failAfterReadings() : 0L,
+                    config.interruptDurationMillis());
+        };
+    }
+
+    private static void printHeader(DeviceConfig config, MqttConfig mqtt) {
         System.out.printf(Locale.ROOT, """
-                === edge-device simulator (Phase 1) ===
+                === edge-device simulator (Phase 2) ===
                 variant           : %s
+                sink              : %s%s
                 devices           : %d
                 publish interval  : %d ms
                 run duration      : %d s
@@ -59,12 +75,13 @@ public final class Main {
                 collectors        : %s
                 %n""",
                 config.variant(),
+                config.sink(),
+                mqtt == null ? "" : " (" + mqtt.brokerUrl() + ", QoS " + mqtt.qos() + ")",
                 config.deviceCount(),
                 config.publishIntervalMillis(),
                 config.runDurationSeconds(),
                 config.failureMode(),
-                config.failureMode() == FailureMode.NONE
-                        ? "" : " (after " + config.failAfterReadings() + " readings)",
+                describeFailureTiming(config),
                 config.seed(),
                 System.getProperty("java.vm.name"),
                 System.getProperty("java.version"),
@@ -72,8 +89,19 @@ public final class Main {
                 GcSnapshot.collectorNames());
     }
 
+    private static String describeFailureTiming(DeviceConfig config) {
+        if (config.failureMode() == FailureMode.NONE) {
+            return "";
+        }
+        String timing = " (after " + config.failAfterReadings() + " readings";
+        if (config.failureMode() == FailureMode.NETWORK_INTERRUPTION) {
+            timing += ", for " + config.interruptDurationMillis() + " ms";
+        }
+        return timing + ")";
+    }
+
     private static void printSummary(
-            FleetRunResult result, CountingSink sink, GcSnapshot delta) {
+            FleetRunResult result, TelemetrySinkFactory sinks, GcSnapshot delta) {
         System.out.printf(Locale.ROOT, """
                 === run summary ===
                 duration          : %d ms
@@ -90,8 +118,8 @@ public final class Main {
                 %n""",
                 result.durationMillis(),
                 result.readingsPublished(),
-                sink.payloadCount(),
-                formatBytes(sink.byteCount()),
+                sinks.payloadCount(),
+                formatBytes(sinks.byteCount()),
                 result.throughputPerSecond(),
                 result.crashedDevices().size(),
                 result.crashedDevices().isEmpty() ? "" : " " + result.crashedDevices(),

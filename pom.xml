@@ -37,6 +37,10 @@
          it is compared against. -->
     <compiler.plugin.version>3.15.0</compiler.plugin.version>
     <resources.plugin.version>3.4.0</resources.plugin.version>
+
+    <!-- Eclipse Paho MQTT 3.1.1 client; see ADR-004. No transitive
+         dependencies, which keeps the edge device's footprint honest. -->
+    <paho.version>1.2.5</paho.version>
   </properties>
 
   <dependencyManagement>
@@ -52,6 +56,11 @@
         <groupId>io.fleet</groupId>
         <artifactId>common</artifactId>
         <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.eclipse.paho</groupId>
+        <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+        <version>${paho.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>
