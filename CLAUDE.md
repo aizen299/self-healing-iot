@@ -31,7 +31,7 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phases 1–4 complete — a fleet whose failures are detected automatically.**
+**Phases 1–5 complete — a fleet whose failures are detected and recorded.**
 `common/`, `edge-device/`, and `gateway/` are implemented and tested; the
 other modules are still README-only scaffolding stating their target
 phase.
@@ -87,6 +87,12 @@ fleet.
 Heartbeats ride the telemetry tick, so `GATEWAY_HEARTBEAT_INTERVAL_MS` must
 match `FLEET_PUBLISH_INTERVAL_MS`. Nothing enforces that across the two
 processes; a mismatch shows up as false failures or slow detection.
+
+Telemetry and health events persist to an embedded H2 store behind a
+`TelemetryStore` interface (ADR-007) — embedded because containers are
+Phase 7, and replaceable by a server-backed TSDB then. `/history` and
+`/stats` query it. A store failure is counted, never fatal, so check
+`store errors` before trusting a recorded run.
 
 ## Development phases — strict build order
 

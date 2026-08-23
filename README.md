@@ -76,9 +76,9 @@ and current implementation status.
 
 ## Status
 
-**Phases 1–4 complete — a fleet whose failures are detected automatically.**
+**Phases 1–5 complete — a fleet whose failures are detected and recorded.**
 `common/`, `edge-device/`, and `gateway/` are implemented, tested, and
-runnable; 115 tests pass. The remaining modules are still scaffolding.
+runnable; 132 tests pass. The remaining modules are still scaffolding.
 
 The simulator runs a fleet of 50 devices in two variants — a
 resource-disciplined one and a conventional baseline — producing an
@@ -102,6 +102,11 @@ Devices walk `ONLINE → SUSPECTED → OFFLINE → RECOVERING → ONLINE`, and
 failures are announced on `fleet/{id}/events` for Phase 9's recovery to act
 on. See [ADR-006](docs/decisions/ADR-006-failure-detection.md).
 
+Telemetry and health events are persisted to an embedded store, queryable
+over HTTP for device history and fleet aggregates — including the recovery
+timings Pillar B's MTTR is computed from
+([ADR-007](docs/decisions/ADR-007-telemetry-storage.md)).
+
 ## Development phases
 
 Build order is strict — never start a phase before the previous one has a
@@ -112,7 +117,7 @@ working, tested demonstration. This numbering is canonical and matches
 - [x] Phase 2 — MQTT communication
 - [x] Phase 3 — Java gateway
 - [x] Phase 4 — Heartbeat / failure detection
-- [ ] Phase 5 — Persistent telemetry
+- [x] Phase 5 — Persistent telemetry
 - [ ] Phase 6 — Kafka streaming
 - [ ] Phase 7 — Containerization (Docker)
 - [ ] Phase 8 — Kubernetes deployment

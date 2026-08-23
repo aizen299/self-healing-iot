@@ -1,6 +1,10 @@
 package io.fleet.gateway;
 
+import io.fleet.common.DeviceEventRecord;
+import io.fleet.common.DeviceEventType;
 import io.fleet.common.DeviceHealth;
+import io.fleet.common.StoreException;
+import io.fleet.common.TelemetryStore;
 
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -25,6 +29,7 @@ public final class HealthMonitor implements AutoCloseable {
     private final HealthPolicy policy;
     private final GatewayMetrics metrics;
     private final EventPublisher events;
+    private final TelemetryStore store;
     private final long sweepIntervalMillis;
     private final ScheduledExecutorService scheduler;
 
@@ -34,7 +39,19 @@ public final class HealthMonitor implements AutoCloseable {
             GatewayMetrics metrics,
             EventPublisher events,
             long sweepIntervalMillis) {
+        this(registry, policy, metrics, events,
+                new io.fleet.gateway.store.NoOpTelemetryStore(), sweepIntervalMillis);
+    }
 
+    public HealthMonitor(
+            DeviceRegistry registry,
+            HealthPolicy policy,
+            GatewayMetrics metrics,
+            EventPublisher events,
+            TelemetryStore store,
+            long sweepIntervalMillis) {
+
+        this.store = store;
         this.registry = registry;
         this.policy = policy;
         this.metrics = metrics;
@@ -106,7 +123,37 @@ public final class HealthMonitor implements AutoCloseable {
             System.out.printf("device %s is heartbeating again; on probation%n",
                     transition.deviceId());
         }
+        persist(transition);
         events.publish(transition);
+    }
+
+    /**
+     * Writes the transition to history before announcing it.
+     *
+     * <p>Order matters: a consumer that reacts to the event and then queries
+     * the store must not find the failure missing from the record it is
+     * reacting to.
+     */
+    private void persist(HealthTransition transition) {
+        DeviceEventType type = switch (transition.to()) {
+            case OFFLINE -> DeviceEventType.DEVICE_OFFLINE;
+            case RECOVERING -> DeviceEventType.DEVICE_RECOVERING;
+            case ONLINE -> transition.isRecovery() ? DeviceEventType.DEVICE_RECOVERED : null;
+            case SUSPECTED, UNKNOWN -> null;
+        };
+        if (type == null) {
+            return;
+        }
+        try {
+            store.recordEvent(new DeviceEventRecord(
+                    transition.deviceId(), type, transition.from(), transition.to(),
+                    transition.atMillis(), transition.missedHeartbeats(),
+                    transition.recoveryDurationMillis()));
+        } catch (StoreException e) {
+            metrics.storeError();
+            System.err.println("could not persist " + type + " for "
+                    + transition.deviceId() + ": " + e.getMessage());
+        }
     }
 
     @Override

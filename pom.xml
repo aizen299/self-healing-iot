@@ -48,6 +48,9 @@
          transitive dependencies, and explicit control over how a malformed
          payload is reported. See ADR-005. -->
     <jackson.version>2.17.2</jackson.version>
+
+    <!-- Embedded, pure Java, 2.8 MB and no native libraries; see ADR-007. -->
+    <h2.version>2.3.232</h2.version>
   </properties>
 
   <dependencyManagement>
@@ -73,6 +76,11 @@
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-core</artifactId>
         <version>${jackson.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.h2database</groupId>
+        <artifactId>h2</artifactId>
+        <version>${h2.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

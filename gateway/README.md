@@ -3,9 +3,9 @@
 Java MQTT gateway. Subscribes to device topics, validates and deserializes
 telemetry, tracks per-device state, and exposes a health/status API.
 
-**Status:** Phases 3–4 complete — ingestion, validation, the device
-registry, the HTTP API, and automatic failure detection. Forwarding to
-Kafka arrives in Phase 6.
+**Status:** Phases 3–5 complete — ingestion, validation, the device
+registry, the HTTP API, automatic failure detection, and persistent
+history. Forwarding to Kafka arrives in Phase 6.
 
 Two runtime dependencies — the Paho MQTT client and Jackson's streaming
 parser — and the JDK's own HTTP server rather than a web framework. See
@@ -81,6 +81,34 @@ Devices walk `UNKNOWN → ONLINE → SUSPECTED → OFFLINE → RECOVERING → ON
 Transitions worth acting on are published to `fleet/{id}/events` at QoS 1.
 `ONLINE → SUSPECTED` is not among them.
 
+## Persistence
+
+Telemetry and health events are stored in an embedded H2 database
+([ADR-007](../docs/decisions/ADR-007-telemetry-storage.md)). Embedded
+because containers do not arrive until Phase 7 and history should not wait
+for them; H2 specifically because it is 2.8 MB of pure Java with no native
+libraries, which keeps the gateway small and portable to the arm64
+containers of Phase 7.
+
+It sits behind a `TelemetryStore` interface, so a server-backed
+time-series database can replace it later without the gateway changing —
+the same seam that let MQTT land in Phase 2 without a rewrite.
+
+- **Readings are batched**; at fleet rate, committing each one would make
+  the store the bottleneck in Phase 8's throughput numbers.
+- **Health events are written through** — rare, individually meaningful,
+  and the input to MTTR.
+- **Every query flushes first**, so a caller never reads a history that is
+  still partly in memory.
+- **Failed devices are derived from the event history**, not a status
+  column, so the answer survives a gateway restart.
+- **Retention is off by default.** A production fleet prunes; this
+  project's reproducibility contract says raw data is kept.
+
+A store failure is counted and reported but never fatal — losing history
+is bad, losing detection is worse. Check `store errors` before trusting a
+recorded experiment.
+
 ## HTTP API
 
 | Endpoint | Returns |
@@ -88,6 +116,14 @@ Transitions worth acting on are published to `fleet/{id}/events` at QoS 1.
 | `GET /health` | Liveness and fleet-wide counters |
 | `GET /devices` | Every known device, ordered by id |
 | `GET /devices/{id}` | One device, or 404 |
+| `GET /history?device=<id>&from=<ms>&to=<ms>` | Stored readings for a device |
+| `GET /stats?from=<ms>&to=<ms>` | Fleet average, telemetry rate, failures, mean recovery |
+
+`/history` and `/stats` read the store, not the registry — the registry
+keeps only the latest reading per device, which is what the store exists
+to avoid. They answer **503** rather than 500 when the store is
+unavailable: the gateway is still detecting failures, only the history is
+missing.
 
 ```bash
 curl -s http://127.0.0.1:8080/health
@@ -126,6 +162,12 @@ every stale retained entry becomes a phantom failure to recover.
 | `GATEWAY_OFFLINE_AFTER_MISSES` | `4` | Must exceed the suspect threshold |
 | `GATEWAY_RECOVERY_CONFIRMATIONS` | `2` | Heartbeats needed to leave probation |
 | `GATEWAY_MONITOR_INTERVAL_MS` | `250` | How often the silence sweep runs |
+| `GATEWAY_STORE_ENABLED` | `true` | Persist telemetry and events |
+| `GATEWAY_STORE_PATH` | `./data/fleet` | Database file, or `mem` for in-memory |
+| `GATEWAY_STORE_BATCH_SIZE` | `200` | Readings buffered before a batch insert |
+| `GATEWAY_STORE_FLUSH_INTERVAL_MS` | `1000` | Longest a buffered reading may wait |
+| `GATEWAY_STORE_RETENTION_HOURS` | `0` | `0` never prunes |
+| `GATEWAY_STORE_PRUNE_INTERVAL_MINS` | `60` | How often pruning runs |
 | `MQTT_KEEPALIVE_SECONDS` | `60` | |
 | `MQTT_CONNECTION_TIMEOUT_SECONDS` | `10` | |
 | `MQTT_OPERATION_TIMEOUT_SECONDS` | `10` | Ceiling on any blocking client call |
