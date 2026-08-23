@@ -32,7 +32,11 @@ public record HealthTransition(
 
     /** A failed device has just been confirmed back in service. */
     public boolean isRecovery() {
-        return to == DeviceHealth.ONLINE && from == DeviceHealth.RECOVERING;
+        // OFFLINE directly to ONLINE happens when recoveryConfirmations is 1,
+        // so probation is skipped; that is still a recovery and must still be
+        // counted and timed.
+        return to == DeviceHealth.ONLINE
+                && (from == DeviceHealth.RECOVERING || from == DeviceHealth.OFFLINE);
     }
 
     /**

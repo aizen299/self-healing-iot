@@ -15,8 +15,32 @@ import java.nio.charset.StandardCharsets;
  * of every device rather than waiting for the next transition.
  */
 public enum Presence {
+
+    /** Connected. Published by the device on connect. */
     ONLINE,
-    OFFLINE;
+
+    /**
+     * Gone without saying goodbye — published by the <em>broker</em> as the
+     * device's Last Will.
+     *
+     * <p>This is a failure signal. It means the connection dropped without a
+     * DISCONNECT: power loss, a kill, a severed network. The gateway declares
+     * the device failed on receipt rather than waiting for a heartbeat
+     * timeout.
+     */
+    OFFLINE,
+
+    /**
+     * Left deliberately — published by the device itself immediately before a
+     * clean DISCONNECT.
+     *
+     * <p>Distinct from {@link #OFFLINE} because the two are otherwise
+     * indistinguishable to a subscriber, and conflating them would make every
+     * orderly fleet shutdown look like a fleet-wide failure — which from
+     * Phase 9 would mean provisioning replacements for devices that were
+     * stopped on purpose.
+     */
+    SHUTDOWN;
 
     private final byte[] payload = name().getBytes(StandardCharsets.UTF_8);
 

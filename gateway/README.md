@@ -51,8 +51,16 @@ Two paths, because neither covers the other
 
 | Failure | Connection | Last Will | Heartbeat timeout |
 |---|---|---|---|
-| Power loss, kill, network cut | drops | **fires** | would also fire, later |
+| Power loss, kill, network cut | drops | **fires — immediate** | would also fire, later |
 | Wedged process, blocked loop | **stays up** | never fires | **fires** |
+
+Both paths drive health. A fired will declares the device failed on
+receipt — the event carries `missedHeartbeats: 0`, which is how you tell
+the fast path from the timeout.
+
+A device that shuts down **cleanly** publishes `SHUTDOWN` rather than
+`OFFLINE` and is retired, not failed; otherwise stopping the fleet on
+purpose would look like a fleet-wide failure.
 
 The second row is why this phase exists. A device that stays connected and
 keeps publishing telemetry while its liveness path has wedged produces no

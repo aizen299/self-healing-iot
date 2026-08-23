@@ -1,6 +1,7 @@
 package io.fleet.gateway;
 
 import io.fleet.common.DeviceHealth;
+import io.fleet.common.Presence;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -101,13 +102,59 @@ class HealthMonitorTest {
     @Test
     @DisplayName("a device never heard from is left alone, however long it is silent")
     void ghostDevicesAreNotDeclaredFailed() {
-        registry.recordPresence("ghost-001", io.fleet.common.Presence.OFFLINE, T0);
+        presence("ghost-001", Presence.OFFLINE, T0);
 
         monitor.sweep(T0 + 1_000_000L);
 
         assertEquals(DeviceHealth.UNKNOWN, healthOf("ghost-001"));
         assertEquals(0L, metrics.failuresDetectedCount());
         assertEquals(List.of(), published.events);
+    }
+
+    @Test
+    @DisplayName("a fired Last Will declares a failure immediately, without waiting for a timeout")
+    void lastWillIsTheFastDetectionPath() {
+        heartbeat("device-001", T0);
+        assertEquals(DeviceHealth.ONLINE, healthOf("device-001"));
+
+        // What the broker publishes when a device drops without a DISCONNECT.
+        presence("device-001", Presence.OFFLINE, T0 + 100L);
+
+        assertEquals(DeviceHealth.OFFLINE, healthOf("device-001"),
+                "the will is proof the device is gone; there is nothing to wait for");
+        assertEquals(1L, metrics.failuresDetectedCount());
+        assertEquals(1, published.events.size());
+        assertEquals(DeviceHealth.OFFLINE, published.events.get(0).to());
+    }
+
+    @Test
+    @DisplayName("an orderly shutdown is not a failure")
+    void deliberateShutdownDoesNotTriggerRecovery() {
+        heartbeat("device-001", T0);
+
+        // A device that says goodbye publishes SHUTDOWN, not OFFLINE. Treating
+        // the two alike would make every orderly fleet stop look like a
+        // fleet-wide failure, and from Phase 9 would provision replacements
+        // for devices that were stopped on purpose.
+        presence("device-001", Presence.SHUTDOWN, T0 + 100L);
+        assertEquals(DeviceHealth.UNKNOWN, healthOf("device-001"));
+
+        // And the silence that follows must not resurrect it as a failure.
+        monitor.sweep(T0 + 100_000L);
+
+        assertEquals(DeviceHealth.UNKNOWN, healthOf("device-001"));
+        assertEquals(0L, metrics.failuresDetectedCount());
+        assertEquals(List.of(), published.events);
+    }
+
+    @Test
+    @DisplayName("a retained will for a device never heard from is still ignored")
+    void aRetainedWillDoesNotCondemnAGhost() {
+        presence("ghost-001", Presence.OFFLINE, T0);
+
+        assertEquals(DeviceHealth.UNKNOWN, healthOf("ghost-001"),
+                "a retained OFFLINE proves a device existed once, not that it just died");
+        assertEquals(0L, metrics.failuresDetectedCount());
     }
 
     @Test
@@ -135,6 +182,10 @@ class HealthMonitorTest {
         assertEquals(
                 List.of("device-001", "device-002", "device-003"),
                 transitions.stream().map(HealthTransition::deviceId).toList());
+    }
+
+    private void presence(String deviceId, Presence presence, long atMillis) {
+        registry.recordPresence(deviceId, presence, atMillis, policy).ifPresent(monitor::announce);
     }
 
     private void heartbeat(String deviceId, long atMillis) {

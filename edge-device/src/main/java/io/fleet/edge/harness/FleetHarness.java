@@ -168,10 +168,11 @@ public final class FleetHarness implements AutoCloseable {
         public void run() {
             try {
                 long now = System.currentTimeMillis();
-                // Heartbeat first: liveness should not depend on a reading
-                // succeeding, and a device that crashes mid-tick has already
-                // asserted it was alive when the tick began.
-                device.publishHeartbeat(now);
+                // Heartbeat first, and independently: liveness should not
+                // depend on a reading succeeding, and a transport hiccup on one
+                // must not cost the other — they are separate messages on
+                // separate topics.
+                heartbeatIndependently(now);
                 device.publishReading(now);
             } catch (DeviceCrashedException e) {
                 crashedDevices.add(device.deviceId());
@@ -184,6 +185,22 @@ public final class FleetHarness implements AutoCloseable {
             } catch (RuntimeException e) {
                 unexpectedErrors.increment();
                 System.err.println("unexpected error in " + device.deviceId() + ": " + e);
+            }
+        }
+
+        /**
+         * Publishes the heartbeat, absorbing only transport failures.
+         *
+         * <p>A {@link DeviceCrashedException} deliberately propagates: the
+         * device is dead, and the reading must not be attempted either.
+         */
+        private void heartbeatIndependently(long nowMillis) {
+            try {
+                device.publishHeartbeat(nowMillis);
+            } catch (SinkException e) {
+                sinkErrors.increment();
+                System.err.println("sink rejected heartbeat from " + device.deviceId()
+                        + ": " + e.getMessage());
             }
         }
 

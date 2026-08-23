@@ -92,10 +92,13 @@ class MqttToGatewayTest {
             assertEquals(0L, metrics.invalidCount(), "in-range telemetry must not be rejected");
 
             // Closing the fleet is an orderly shutdown, so each device publishes
-            // retained OFFLINE and the gateway follows the whole lifecycle.
-            awaitUntil(() -> presenceOf(registry, prefix + "-001") == Presence.OFFLINE);
+            // retained SHUTDOWN — not the OFFLINE the broker would publish as a
+            // will — and the gateway must not read that as a failure.
+            awaitUntil(() -> presenceOf(registry, prefix + "-001") == Presence.SHUTDOWN);
             assertEquals(0L, registry.onlineCount(),
                     "no device should still be reported online after a clean shutdown");
+            assertEquals(0L, metrics.failuresDetectedCount(),
+                    "stopping a fleet on purpose is not a fleet-wide failure");
         }
     }
 

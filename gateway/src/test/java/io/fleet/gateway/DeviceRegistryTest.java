@@ -15,6 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DeviceRegistryTest {
 
     private final DeviceRegistry registry = new DeviceRegistry();
+    private final HealthPolicy policy = new HealthPolicy(1_000L, 2, 4, 2);
+
 
     @Test
     void recordsTelemetryAgainstTheRightDevice() {
@@ -46,9 +48,9 @@ class DeviceRegistryTest {
     void presenceOnlyDevicesAreDistinguished() {
         // Retained presence outlives the device that set it (ADR-004), so a
         // status message is not evidence the device currently exists.
-        registry.recordPresence("ghost-001", Presence.OFFLINE, 500L);
+        registry.recordPresence("ghost-001", Presence.OFFLINE, 500L, policy);
         registry.recordTelemetry(reading("device-001", 20.0d), 1_000L);
-        registry.recordPresence("device-001", Presence.ONLINE, 1_100L);
+        registry.recordPresence("device-001", Presence.ONLINE, 1_100L, policy);
 
         assertTrue(registry.find("ghost-001").orElseThrow().presenceOnly());
         assertFalse(registry.find("device-001").orElseThrow().presenceOnly());
@@ -59,7 +61,7 @@ class DeviceRegistryTest {
 
     @Test
     void telemetryAfterPresenceClearsThePresenceOnlyFlag() {
-        registry.recordPresence("device-001", Presence.ONLINE, 500L);
+        registry.recordPresence("device-001", Presence.ONLINE, 500L, policy);
         assertTrue(registry.find("device-001").orElseThrow().presenceOnly());
 
         registry.recordTelemetry(reading("device-001", 20.0d), 900L);

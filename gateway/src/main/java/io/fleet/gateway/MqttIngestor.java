@@ -55,16 +55,18 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
     private final MqttClient client;
 
     public MqttIngestor(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics) {
-        this(config, registry, metrics, Clock.systemUTC());
+        this(config, registry, metrics, config.healthPolicy(), Clock.systemUTC());
     }
 
+    /** @param policy shared with the monitor so one object defines the rules */
     public MqttIngestor(
-            GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics, Clock clock) {
+            GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
+            HealthPolicy policy, Clock clock) {
         this.config = config;
         this.registry = registry;
         this.metrics = metrics;
         this.clock = clock;
-        this.policy = config.healthPolicy();
+        this.policy = policy;
         try {
             this.client = new MqttClient(
                     config.brokerUrl(), config.clientId(), new MemoryPersistence());
@@ -211,8 +213,10 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
             return;
         }
         try {
-            registry.recordPresence(deviceId, Presence.valueOf(raw), clock.millis());
+            Presence presence = Presence.valueOf(raw);
             metrics.presenceEvent();
+            registry.recordPresence(deviceId, presence, clock.millis(), policy)
+                    .ifPresent(onTransition);
         } catch (IllegalArgumentException e) {
             metrics.invalidPresence();
             System.err.println("unknown presence '" + raw + "' on " + topic);
@@ -233,10 +237,11 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
      */
     @Override
     public void publish(HealthTransition transition) {
-        DeviceEventType type = eventTypeOf(transition);
-        if (type == null) {
+        Optional<DeviceEventType> announceable = eventTypeOf(transition);
+        if (announceable.isEmpty()) {
             return;
         }
+        DeviceEventType type = announceable.get();
         try {
             client.publish(Topics.events(transition.deviceId()),
                     encodeEvent(transition, type), EVENT_QOS, false);
@@ -253,12 +258,13 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
      * announcing it would invite consumers to react to what is explicitly not
      * yet a failure.
      */
-    private static DeviceEventType eventTypeOf(HealthTransition transition) {
+    private static Optional<DeviceEventType> eventTypeOf(HealthTransition transition) {
         return switch (transition.to()) {
-            case OFFLINE -> DeviceEventType.DEVICE_OFFLINE;
-            case RECOVERING -> DeviceEventType.DEVICE_RECOVERING;
-            case ONLINE -> transition.isRecovery() ? DeviceEventType.DEVICE_RECOVERED : null;
-            case SUSPECTED, UNKNOWN -> null;
+            case OFFLINE -> Optional.of(DeviceEventType.DEVICE_OFFLINE);
+            case RECOVERING -> Optional.of(DeviceEventType.DEVICE_RECOVERING);
+            case ONLINE -> transition.isRecovery()
+                    ? Optional.of(DeviceEventType.DEVICE_RECOVERED) : Optional.empty();
+            case SUSPECTED, UNKNOWN -> Optional.empty();
         };
     }
 

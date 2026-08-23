@@ -9,7 +9,6 @@ import io.fleet.common.Telemetry;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -78,13 +77,9 @@ public final class HealthApi implements AutoCloseable {
             // The gateway's own judgement, as opposed to what the broker and
             // the devices report. This is what recovery acts on.
             generator.writeObjectFieldStart("health");
-            registry.healthCounts().forEach((state, count) -> {
-                try {
-                    generator.writeNumberField(state.name(), count);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            });
+            for (var entry : registry.healthCounts().entrySet()) {
+                generator.writeNumberField(entry.getKey().name(), entry.getValue());
+            }
             generator.writeEndObject();
             generator.writeNumberField("heartbeatsAccepted", metrics.heartbeatsAcceptedCount());
             generator.writeNumberField("heartbeatsMalformed", metrics.heartbeatsMalformedCount());

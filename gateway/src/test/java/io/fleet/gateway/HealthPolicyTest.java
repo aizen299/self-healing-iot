@@ -2,6 +2,7 @@ package io.fleet.gateway;
 
 import io.fleet.common.ConfigurationException;
 import io.fleet.common.DeviceHealth;
+import io.fleet.common.Presence;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -54,6 +55,47 @@ class HealthPolicyTest {
         assertEquals(DeviceHealth.RECOVERING, policy.afterHeartbeat(DeviceHealth.OFFLINE, 1));
         assertEquals(DeviceHealth.RECOVERING, policy.afterHeartbeat(DeviceHealth.RECOVERING, 1));
         assertEquals(DeviceHealth.ONLINE, policy.afterHeartbeat(DeviceHealth.RECOVERING, 2));
+    }
+
+    @Test
+    @DisplayName("recoveryConfirmations actually changes how long probation lasts")
+    void confirmationCountIsHonoured() {
+        // With 1 the value used to behave identically to 2, so configuring it
+        // did nothing and reported no error.
+        HealthPolicy immediate = new HealthPolicy(1_000L, 2, 4, 1);
+        assertEquals(DeviceHealth.ONLINE, immediate.afterHeartbeat(DeviceHealth.OFFLINE, 1));
+
+        HealthPolicy patient = new HealthPolicy(1_000L, 2, 4, 3);
+        assertEquals(DeviceHealth.RECOVERING, patient.afterHeartbeat(DeviceHealth.OFFLINE, 1));
+        assertEquals(DeviceHealth.RECOVERING, patient.afterHeartbeat(DeviceHealth.RECOVERING, 2));
+        assertEquals(DeviceHealth.ONLINE, patient.afterHeartbeat(DeviceHealth.RECOVERING, 3));
+    }
+
+    @Test
+    @DisplayName("the Last Will condemns a known device but never a ghost")
+    void presenceDrivesTheFastPath() {
+        assertEquals(DeviceHealth.OFFLINE,
+                policy.afterPresence(DeviceHealth.ONLINE, Presence.OFFLINE));
+        assertEquals(DeviceHealth.OFFLINE,
+                policy.afterPresence(DeviceHealth.SUSPECTED, Presence.OFFLINE));
+        assertEquals(DeviceHealth.UNKNOWN,
+                policy.afterPresence(DeviceHealth.UNKNOWN, Presence.OFFLINE));
+
+        // Connecting proves nothing about liveness; only a heartbeat does.
+        assertEquals(DeviceHealth.SUSPECTED,
+                policy.afterPresence(DeviceHealth.SUSPECTED, Presence.ONLINE));
+
+        // Leaving on purpose retires the device rather than failing it.
+        assertEquals(DeviceHealth.UNKNOWN,
+                policy.afterPresence(DeviceHealth.ONLINE, Presence.SHUTDOWN));
+    }
+
+    @Test
+    void missCountIsClampedRatherThanOverflowing() {
+        HealthPolicy fine = new HealthPolicy(1L, 2, 4, 2);
+        // An unchecked cast here goes negative and fails every threshold, so
+        // the longest-silent device would be the one never declared failed.
+        assertTrue(fine.missedHeartbeats(1L, Long.MAX_VALUE) > 0);
     }
 
     @Test

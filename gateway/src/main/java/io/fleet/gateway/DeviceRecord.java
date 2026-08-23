@@ -13,8 +13,9 @@ import io.fleet.common.Telemetry;
  * <p>Three separate notions of state live here on purpose:
  * {@code lastTelemetry.status()} is the device's opinion of its own sensors,
  * {@code presence} is the broker's account of the connection, and
- * {@code health} is the gateway's own inference from heartbeat timing. Only
- * the last is a judgement, and only the last drives recovery.
+ * {@code health} is the gateway's own judgement, drawn from both heartbeat
+ * timing and what the broker reports. Only the last is an inference, and only
+ * the last drives recovery.
  *
  * @param deviceId               stable device identifier
  * @param health                 the gateway's judgement
@@ -74,9 +75,22 @@ public record DeviceRecord(
                 lastTelemetry, lastTelemetryAtMillis, telemetryAccepted, telemetryRejected + 1);
     }
 
-    public DeviceRecord withPresence(Presence newPresence, long atMillis) {
-        return new DeviceRecord(deviceId, health, healthChangedAtMillis, offlineSinceMillis,
-                lastHeartbeatAtMillis, consecutiveHeartbeats, newPresence, atMillis,
+    /**
+     * Records a connection change and the health it implies.
+     *
+     * <p>A device that shut down deliberately has its heartbeat history
+     * cleared as well as its health reset: leaving the last heartbeat in place
+     * would let the next sweep count the silence since it left and declare a
+     * failure for a device that was stopped on purpose.
+     */
+    public DeviceRecord withPresence(Presence newPresence, long atMillis, HealthPolicy policy) {
+        DeviceHealth next = policy.afterPresence(health, newPresence);
+        boolean retired = newPresence == Presence.SHUTDOWN;
+        return new DeviceRecord(deviceId, next, changedAt(next, atMillis),
+                offlineSince(next, atMillis),
+                retired ? 0L : lastHeartbeatAtMillis,
+                retired ? 0 : consecutiveHeartbeats,
+                newPresence, atMillis,
                 lastTelemetry, lastTelemetryAtMillis, telemetryAccepted, telemetryRejected);
     }
 
