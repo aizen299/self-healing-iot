@@ -105,9 +105,19 @@ the same seam that let MQTT land in Phase 2 without a rewrite.
 - **Retention is off by default.** A production fleet prunes; this
   project's reproducibility contract says raw data is kept.
 
-A store failure is counted and reported but never fatal — losing history
-is bad, losing detection is worse. Check `store errors` before trusting a
-recorded experiment.
+A store failure is never fatal — losing history is bad, losing detection is
+worse. But that means a run could finish with holes while every figure over
+it looked normal, so **the gaps travel with the data**:
+
+- The store counts readings *lost*, not failures, and records each loss
+  durably with a timestamp and reason.
+- `/stats` and `/history` return an `integrity` block beside the figures —
+  `complete`, `droppedWrites`, and a blunt summary string.
+- The run summary prints `history: complete`, or
+  `INCOMPLETE — N readings lost; not a valid experiment record`.
+
+A window that is not complete cannot support a result, and it says so
+itself rather than relying on someone remembering to check a log.
 
 ## HTTP API
 
@@ -168,6 +178,7 @@ every stale retained entry becomes a phantom failure to recover.
 | `GATEWAY_STORE_FLUSH_INTERVAL_MS` | `1000` | Longest a buffered reading may wait |
 | `GATEWAY_STORE_RETENTION_HOURS` | `0` | `0` never prunes |
 | `GATEWAY_STORE_PRUNE_INTERVAL_MINS` | `60` | How often pruning runs |
+| `GATEWAY_STORE_ALLOW_REMOTE` | `false` | H2 mixed mode; opens a TCP port when on |
 | `MQTT_KEEPALIVE_SECONDS` | `60` | |
 | `MQTT_CONNECTION_TIMEOUT_SECONDS` | `10` | |
 | `MQTT_OPERATION_TIMEOUT_SECONDS` | `10` | Ceiling on any blocking client call |

@@ -75,26 +75,40 @@ public final class Main {
                 stopped.await();
             }
 
-            printSummary(registry, metrics);
+            printSummary(registry, metrics, store);
         } finally {
             finished.countDown();
         }
     }
 
     /**
-     * Opens the configured store, or a null object when persistence is off.
+     * Opens the configured store, falling back to a null object when
+     * persistence is off or unavailable.
      *
      * <p>The gateway detects failures with or without a store, so storage
      * being unavailable must not stop it starting — but the operator has to
      * know the history is not being kept.
      */
-    private static TelemetryStore openStore(StoreConfig storeConfig) throws StoreException {
+    private static TelemetryStore openStore(StoreConfig storeConfig) {
         if (!storeConfig.enabled()) {
             System.out.println("telemetry store disabled; history will not be kept");
             return new NoOpTelemetryStore();
         }
-        System.out.println("telemetry store at " + storeConfig.jdbcUrl());
-        return new H2TelemetryStore(storeConfig);
+        try {
+            H2TelemetryStore store = new H2TelemetryStore(storeConfig);
+            System.out.println("telemetry store at " + store.jdbcUrl());
+            return store;
+        } catch (StoreException e) {
+            // Consistent with the write path. A store that fails on every
+            // write is tolerated because losing detection is worse than losing
+            // history; a store that cannot be opened at all was previously
+            // fatal, which meant a stale lock file or a full disk stopped the
+            // fleet being monitored for exactly the reason the design says
+            // should never stop monitoring.
+            System.err.println("could not open the telemetry store, continuing without history: "
+                    + e.getMessage());
+            return new NoOpTelemetryStore();
+        }
     }
 
     private static void printHeader(GatewayConfig config) {
@@ -122,7 +136,14 @@ public final class Main {
                 System.getProperty("java.version"));
     }
 
-    private static void printSummary(DeviceRegistry registry, GatewayMetrics metrics) {
+    private static void printSummary(
+            DeviceRegistry registry, GatewayMetrics metrics, TelemetryStore store) {
+        // Printed alongside the figures, not buried in a log line: a run that
+        // lost readings must be hard to mistake for one that did not.
+        long dropped = store.droppedWrites();
+        String historyState = dropped == 0L
+                ? "complete"
+                : "INCOMPLETE — " + dropped + " readings lost; not a valid experiment record";
         System.out.printf(Locale.ROOT, """
                 %n=== gateway summary ===
                 devices known     : %d
@@ -134,6 +155,7 @@ public final class Main {
                 recoveries        : %d (mean %d ms)
                 monitor errors    : %d
                 store errors      : %d
+                history           : %s
                 telemetry accepted: %d
                 telemetry rejected: %d (malformed %d, invalid %d)
                 presence events   : %d
@@ -153,6 +175,7 @@ public final class Main {
                 metrics.meanRecoveryMillis(),
                 metrics.monitorErrorCount(),
                 metrics.storeErrorCount(),
+                historyState,
                 metrics.acceptedCount(),
                 metrics.rejectedCount(),
                 metrics.malformedCount(),
@@ -164,7 +187,8 @@ public final class Main {
                 metrics.connectionLossCount());
 
         System.out.println("These figures are a demonstration. Only runs recorded under "
-                + "experiments/results/ count as results.");
+                + "experiments/results/ count as results" 
+                + (dropped == 0L ? "." : ", and this run's history is incomplete."));
     }
 
     private Main() {

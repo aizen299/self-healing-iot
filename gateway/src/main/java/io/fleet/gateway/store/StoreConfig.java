@@ -18,6 +18,7 @@ import java.util.Map;
  * @param flushIntervalMs   longest a buffered reading may wait
  * @param retentionHours    age at which readings are pruned; 0 disables pruning
  * @param pruneIntervalMins how often pruning runs
+ * @param allowRemoteAccess whether a file-backed store also listens on TCP
  */
 public record StoreConfig(
         boolean enabled,
@@ -25,7 +26,8 @@ public record StoreConfig(
         int batchSize,
         long flushIntervalMs,
         long retentionHours,
-        long pruneIntervalMins) {
+        long pruneIntervalMins,
+        boolean allowRemoteAccess) {
 
     /** Requests an in-memory database rather than a file. */
     public static final String IN_MEMORY = "mem";
@@ -67,7 +69,12 @@ public record StoreConfig(
                 // history would be the wrong default for this project even
                 // though it is the right one for a production fleet.
                 Env.longValue(env, "GATEWAY_STORE_RETENTION_HOURS", 0L),
-                Env.longValue(env, "GATEWAY_STORE_PRUNE_INTERVAL_MINS", 60L));
+                Env.longValue(env, "GATEWAY_STORE_PRUNE_INTERVAL_MINS", 60L),
+                // Off by default. H2's mixed mode is convenient for poking at
+                // the database while the gateway runs, but it opens a
+                // listening socket nothing asked for — and from Phase 8 that
+                // is a deployment surface rather than a laptop convenience.
+                Env.booleanValue(env, "GATEWAY_STORE_ALLOW_REMOTE", false));
     }
 
     public boolean inMemory() {
@@ -79,15 +86,25 @@ public record StoreConfig(
     }
 
     /**
-     * JDBC URL for this configuration.
+     * Builds a JDBC URL for this configuration.
      *
-     * <p>{@code DB_CLOSE_DELAY=-1} on the in-memory form keeps the database
-     * alive while the JVM is, rather than dropping it the moment the first
-     * connection closes.
+     * <p>The in-memory form gets a name unique to each call. H2 keys
+     * in-memory databases by name, so a fixed one made every store in a JVM
+     * silently share rows — two gateways would have merged their histories,
+     * and the tests had to prune between cases to fake isolation.
+     *
+     * <p>Because the in-memory name is fresh each time, a caller must resolve
+     * this <em>once</em> and reuse the result; calling it twice yields two
+     * different databases. {@code H2TelemetryStore} does exactly that and
+     * exposes the URL it settled on.
+     *
+     * <p>{@code DB_CLOSE_DELAY=-1} keeps the database alive while the JVM is,
+     * rather than dropping it the moment the first connection closes.
      */
-    public String jdbcUrl() {
-        return inMemory()
-                ? "jdbc:h2:mem:fleet;DB_CLOSE_DELAY=-1"
-                : "jdbc:h2:file:" + path + ";AUTO_SERVER=TRUE";
+    public String newJdbcUrl() {
+        if (inMemory()) {
+            return "jdbc:h2:mem:fleet-" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        }
+        return "jdbc:h2:file:" + path + (allowRemoteAccess ? ";AUTO_SERVER=TRUE" : "");
     }
 }

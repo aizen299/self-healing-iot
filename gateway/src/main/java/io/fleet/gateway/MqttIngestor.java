@@ -259,7 +259,7 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
      */
     @Override
     public void publish(HealthTransition transition) {
-        Optional<DeviceEventType> announceable = eventTypeOf(transition);
+        Optional<DeviceEventType> announceable = transition.eventType();
         if (announceable.isEmpty()) {
             return;
         }
@@ -272,22 +272,6 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
             System.err.println("could not publish " + type + " for "
                     + transition.deviceId() + ": " + e);
         }
-    }
-
-    /**
-     * Only transitions something downstream must act on become events.
-     * Suspicion is the detector hedging against a lost QoS 0 message, and
-     * announcing it would invite consumers to react to what is explicitly not
-     * yet a failure.
-     */
-    private static Optional<DeviceEventType> eventTypeOf(HealthTransition transition) {
-        return switch (transition.to()) {
-            case OFFLINE -> Optional.of(DeviceEventType.DEVICE_OFFLINE);
-            case RECOVERING -> Optional.of(DeviceEventType.DEVICE_RECOVERING);
-            case ONLINE -> transition.isRecovery()
-                    ? Optional.of(DeviceEventType.DEVICE_RECOVERED) : Optional.empty();
-            case SUSPECTED, UNKNOWN -> Optional.empty();
-        };
     }
 
     private byte[] encodeEvent(HealthTransition transition, DeviceEventType type)

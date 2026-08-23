@@ -19,6 +19,12 @@ import java.util.List;
  * <p>Writes may be buffered; {@link #flush()} makes everything durable.
  * Anything reporting a result must flush first, or it may read a history that
  * is still partly in memory.
+ *
+ * <p>A store may lose writes without the gateway stopping — that is the
+ * deliberate priority, since losing failure detection is worse than losing
+ * history. {@link #integrity(long, long)} is how a caller finds out, and
+ * anything reporting a figure must check it: a window that is not complete
+ * cannot support a result.
  */
 public interface TelemetryStore extends AutoCloseable {
 
@@ -65,6 +71,18 @@ public interface TelemetryStore extends AutoCloseable {
 
     /** Readings stored for one device, for uptime and coverage checks. */
     long readingCount(String deviceId) throws StoreException;
+
+    /**
+     * Whether the history covering a window is known to be complete.
+     *
+     * <p>Reports only losses the store detected. It cannot know about data
+     * that never reached it, so a complete window means "nothing was dropped
+     * here", not "everything the fleet produced is here".
+     */
+    StoreIntegrity integrity(long fromMillis, long toMillis) throws StoreException;
+
+    /** Readings this store has lost since it was opened. */
+    long droppedWrites();
 
     /** Removes readings older than the cutoff; returns how many went. */
     int pruneTelemetryBefore(long cutoffMillis) throws StoreException;

@@ -102,11 +102,41 @@ restart, which is the point of having a store at all.
 - Negative: one connection guarded by a monitor. Fine for one batched
   writer and occasional readers; it would need a pool before the store
   served concurrent analytical queries.
-- Negative: a store failure is counted and reported but never fatal — the
-  gateway keeps detecting failures with a broken store. That is the right
-  priority, but it means a run can complete "successfully" with an
-  incomplete history, so `store errors` must be checked before any recorded
-  experiment is trusted.
+- Neutral: a store failure is never fatal — the gateway keeps detecting
+  failures with a broken store, because losing detection is worse than
+  losing history. See the amendment below for how that is kept safe.
+## Amendment, 2026-08-23: gaps travel with the data
+
+The first version of this ADR accepted a real hazard and only documented
+it: because a store failure is not fatal, a run could finish with holes in
+its history while every figure derived from it looked entirely normal. A
+fleet average over a window missing a thousand readings reads exactly like
+one over a complete window. The mitigation was "check `store errors`
+first", which is a rule someone has to remember at the moment they are
+least likely to — while looking at a number they want to use.
+
+Two things were also wrong underneath it. A failed batch was neither
+rolled back nor cleared, so partially applied rows were committed by the
+next successful flush; and the ingestor counted one error per failed
+flush, not per lost reading, so a batch of 200 losses reported as `1`.
+
+The fix moves the signal to where it cannot be read past:
+
+- The store counts **readings lost**, not failures, and records each loss
+  durably in `store_integrity` with a timestamp and a reason. An in-memory
+  count backs it up, because the failure that loses readings may equally
+  prevent the marker landing.
+- `TelemetryStore.integrity(from, to)` reports whether a window is
+  complete, and **every query endpoint returns it beside the figures it
+  qualifies**. `/stats` and `/history` carry `complete`, `droppedWrites`,
+  and a blunt `summary` string.
+- The run summary prints `history: complete`, or
+  `INCOMPLETE — N readings lost; not a valid experiment record`.
+
+The reproducibility contract now has something concrete to test rather
+than a habit to rely on: a recorded experiment whose window is not
+complete is not a result, and the window says so itself.
+
 - Revisit if: Phase 7 brings up a container stack, at which point a
   server-backed store behind the same interface becomes cheap — or if a
   study runs long enough that retention and downsampling stop being

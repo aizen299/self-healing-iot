@@ -37,3 +37,16 @@ CREATE TABLE IF NOT EXISTS device_event (
 
 CREATE INDEX IF NOT EXISTS idx_event_device_ts ON device_event (device_id, at_ts);
 CREATE INDEX IF NOT EXISTS idx_event_type_ts   ON device_event (event, at_ts);
+
+-- Losses the store detected, so a query can tell a complete window from a
+-- gapped one. Written on a best-effort basis: the failure that loses readings
+-- may also prevent this row landing, which is why the store keeps an
+-- in-memory count as well.
+CREATE TABLE IF NOT EXISTS store_integrity (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    at_ts         BIGINT      NOT NULL,
+    dropped_count INT         NOT NULL,
+    reason        VARCHAR(500) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_integrity_ts ON store_integrity (at_ts);

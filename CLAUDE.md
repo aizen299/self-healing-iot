@@ -91,8 +91,10 @@ processes; a mismatch shows up as false failures or slow detection.
 Telemetry and health events persist to an embedded H2 store behind a
 `TelemetryStore` interface (ADR-007) — embedded because containers are
 Phase 7, and replaceable by a server-backed TSDB then. `/history` and
-`/stats` query it. A store failure is counted, never fatal, so check
-`store errors` before trusting a recorded run.
+`/stats` query it. A store failure is never fatal, but the gaps travel with
+the data: every query result carries an `integrity` block, and the run
+summary prints `history: complete` or `INCOMPLETE — N readings lost`. A
+window that is not complete cannot support a result.
 
 ## Development phases — strict build order
 

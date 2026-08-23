@@ -1,6 +1,7 @@
 package io.fleet.gateway.store;
 
 import io.fleet.common.DeviceEventRecord;
+import io.fleet.common.StoreIntegrity;
 import io.fleet.common.Telemetry;
 import io.fleet.common.TelemetryStore;
 
@@ -68,6 +69,21 @@ public final class NoOpTelemetryStore implements TelemetryStore {
     @Override
     public int pruneTelemetryBefore(long cutoffMillis) {
         return 0;
+    }
+
+    /**
+     * Complete, because nothing was dropped — nothing was kept either.
+     * Callers distinguish the two by the emptiness of the results, not by
+     * a false integrity failure.
+     */
+    @Override
+    public StoreIntegrity integrity(long fromMillis, long toMillis) {
+        return StoreIntegrity.COMPLETE;
+    }
+
+    @Override
+    public long droppedWrites() {
+        return 0L;
     }
 
     @Override
