@@ -76,9 +76,15 @@ and current implementation status.
 
 ## Status
 
-**Phases 1–5 complete — a fleet whose failures are detected and recorded.**
-`common/`, `edge-device/`, and `gateway/` are implemented, tested, and
-runnable; 132 tests pass. The remaining modules are still scaffolding.
+**Phases 1–5 and 7 complete — a containerised fleet whose failures are
+detected and recorded.** `common/`, `edge-device/`, and `gateway/` are
+implemented, tested, and runnable; 135 tests pass. The remaining modules are
+still scaffolding.
+
+Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
+database need a server, and the phase that supplies servers came after both
+([ADR-008](docs/decisions/ADR-008-containerisation-before-kafka.md)). The
+numbers still identify the phases — they are no longer the order of work.
 
 The simulator runs a fleet of 50 devices in two variants — a
 resource-disciplined one and a conventional baseline — producing an
@@ -119,7 +125,7 @@ working, tested demonstration. This numbering is canonical and matches
 - [x] Phase 4 — Heartbeat / failure detection
 - [x] Phase 5 — Persistent telemetry
 - [ ] Phase 6 — Kafka streaming
-- [ ] Phase 7 — Containerization (Docker)
+- [x] Phase 7 — Containerization (Docker) — *taken before Phase 6, see ADR-008*
 - [ ] Phase 8 — Kubernetes deployment
 - [ ] Phase 9 — Automatic recovery (operator)
 - [ ] Phase 10 — Observability (Prometheus / Grafana)
@@ -166,6 +172,18 @@ Deferred until the phase that needs them: `kind` (Phase 8), Docker
 daemon (Phase 7), `helm` (Phase 13, optional).
 
 ## How to run
+
+The whole stack in containers:
+
+```bash
+docker compose up --build
+```
+
+```bash
+curl -s http://127.0.0.1:18080/health
+```
+
+Or locally, without Docker:
 
 ```bash
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
