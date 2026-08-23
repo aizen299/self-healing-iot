@@ -6,14 +6,28 @@
 # measures gateway memory on this machine. An unbounded container would make
 # those numbers a property of whatever else happened to be running.
 #
-#   docker compose up --build           the whole stack
-#   docker compose up broker gateway    just the pipeline, no devices
+#   docker compose up --build              the whole stack, running until stopped
+#   docker compose up broker gateway       just the pipeline, no devices
+#   docker compose up --scale fleet=3      three independent fleets
+#   ./infrastructure/docker/smoke-test.sh  build and verify without leaving one up
+#
+# The gateway is published on 18080, not 8080: Jenkins already holds 8080 on
+# this machine, and Docker's 0.0.0.0 bind loses to its 127.0.0.1 bind — so the
+# stack reports itself healthy while anything querying the host reaches
+# Jenkins and gets a 403.
 
 name: self-healing-fleet
 
+# Heartbeats ride the telemetry tick (ADR-006), so the gateway's expected
+# interval and the fleet's publish interval must be the same number. Compose
+# is the first artefact that configures both halves together, so the coupling
+# is expressed once here instead of as two literals and a hopeful comment.
+x-tick-interval-ms: &tick "1000"
+
 services:
   broker:
-    image: eclipse-mosquitto:2
+    # eclipse-mosquitto:2 — pinned by digest for the same reason as the JDK.
+    image: eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
     container_name: fleet-broker
     ports:
       - "1883:1883"
@@ -32,44 +46,44 @@ services:
   gateway:
     build:
       context: .
-      dockerfile: infrastructure/docker/gateway.Dockerfile
+      dockerfile: infrastructure/docker/Dockerfile
+      target: gateway
     container_name: fleet-gateway
     depends_on:
       broker:
         condition: service_healthy
     ports:
-      # 18080 on the host, not 8080. Port 8080 is the most contended port on a
-      # developer machine — this one was already taken by an unrelated Jetty
-      # app, and Docker's 0.0.0.0 bind silently lost to its 127.0.0.1 bind, so
-      # the stack looked healthy while the host reached someone else's server.
-      # The container keeps 8080; only the published port moves.
       - "18080:8080"
     environment:
       MQTT_BROKER_URL: tcp://broker:1883
       GATEWAY_CLIENT_ID: fleet-gateway
       GATEWAY_HTTP_PORT: "8080"
-      # Must match the fleet's publish interval, because heartbeats ride the
-      # telemetry tick (ADR-006). Compose is the one place both halves are
-      # visible together, so the coupling is at least obvious here.
-      GATEWAY_HEARTBEAT_INTERVAL_MS: "1000"
-      GATEWAY_STORE_PATH: /app/data/fleet
+      GATEWAY_HEARTBEAT_INTERVAL_MS: *tick
     volumes:
+      # Mounted at the path StoreConfig already defaults to under /app, so the
+      # path is defined once rather than in both the image and here.
       - gateway-data:/app/data
     mem_limit: 512m
+    # Longer than the application's own 10-second shutdown grace. At the
+    # default the two race, and losing means the process is killed mid-shutdown.
+    stop_grace_period: 30s
     restart: unless-stopped
 
-  # The fleet. Scale it with:  docker compose up --scale fleet=1
+  # The fleet.
   #
-  # One container runs the whole fleet rather than one container per device:
-  # ADR-003 scopes the simulation to a shared-JVM harness precisely because
-  # 50 JVMs do not fit in this host's memory. Per-device containers arrive in
-  # the Kubernetes phase, at a much smaller device count, for the recovery
-  # demonstration.
+  # One container runs the whole fleet rather than one per device: ADR-003
+  # scopes the simulation to a shared-JVM harness because 50 JVMs do not fit
+  # in this host's memory, and that does not change inside a container.
+  # Per-device containers arrive with Kubernetes, at a smaller device count,
+  # for the recovery demonstration.
+  #
+  # No container_name, so `--scale fleet=N` works — Docker refuses to scale a
+  # service with a fixed name.
   fleet:
     build:
       context: .
-      dockerfile: infrastructure/docker/edge-device.Dockerfile
-    container_name: fleet-devices
+      dockerfile: infrastructure/docker/Dockerfile
+      target: edge-device
     depends_on:
       broker:
         condition: service_healthy
@@ -77,13 +91,23 @@ services:
       FLEET_SINK: mqtt
       MQTT_BROKER_URL: tcp://broker:1883
       FLEET_DEVICE_COUNT: "10"
-      FLEET_PUBLISH_INTERVAL_MS: "1000"
-      FLEET_RUN_DURATION_SECONDS: "120"
+      FLEET_PUBLISH_INTERVAL_MS: *tick
+      # Deliberately long rather than a timed run. A fleet that exits partway
+      # through `docker compose up` looks exactly like the failure this system
+      # detects — the gateway would dutifully declare every device down, and
+      # nothing on screen would distinguish that from a bug. Stop it with
+      # `docker compose down`.
+      FLEET_RUN_DURATION_SECONDS: "86400"
       FLEET_VARIANT: constrained
       # The heap cap is Pillar A's independent variable, so it is stated here
       # rather than defaulted in the image.
       JAVA_OPTS: "-Xmx64m"
     mem_limit: 256m
+    # Each device publishes retained SHUTDOWN and a real DISCONNECT on the way
+    # out. If that is cut short the broker fires ten Last Wills instead and the
+    # gateway reads a deliberate stop as a fleet-wide failure — the exact
+    # confusion ADR-006 split SHUTDOWN from OFFLINE to prevent.
+    stop_grace_period: 30s
     restart: "no"
 
 volumes:

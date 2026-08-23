@@ -44,11 +44,13 @@ permanently on a laptop with 8 GB.
 
 ### The runtime image is the pinned JDK
 
-`eclipse-temurin:21-jre` is the same HotSpot 21 that ADR-002 pins the host
-to. That was the point of the pin: the container and the host run the same
-JVM, so a measurement taken in one is comparable with a measurement taken in
-the other. Without it, Phase 8 would be comparing runs across two different
-runtimes and calling the difference a result.
+The runtime is Temurin's HotSpot 21, the same family ADR-002 pins the host
+to, and every base image is pinned **by digest** rather than by tag.
+
+The digest matters more than it first appears — see the amendment below.
+A floating `21-jre` tag moves with every Temurin release, so two Phase 8
+runs weeks apart would use different JVM builds while both claimed to be
+pinned, which is precisely the drift ADR-002 exists to prevent.
 
 The build stage uses `maven:3.9-eclipse-temurin-21`, so the enforcer's JVM
 rules — including the GraalVM rejection — pass inside the image exactly as
@@ -91,10 +93,11 @@ published port moves.
 - Positive: every remaining server-shaped dependency — Kafka, a real TSDB,
   Prometheus, Grafana — now has somewhere to run without being installed on
   the host.
-- Positive: the container and host JVMs are the same build, so Phase 8 can
-  compare across them.
-- Positive: the whole stack runs in about 204 MB against limits totalling
-  896 MB, leaving headroom on an 8 GB host.
+- Positive: base images are pinned by digest, so a rebuilt image is the same
+  image.
+- Positive: the whole stack ran in about 204 MB against limits totalling
+  896 MB, leaving headroom on an 8 GB host. A demonstration, not a result —
+  only a run recorded under `experiments/results/` is that.
 - Negative: the images are around 480 MB each, dominated by the JRE base.
   `jlink` or an Alpine base would cut that substantially and is worth doing
   before anything gets pushed to a registry.
@@ -104,5 +107,34 @@ published port moves.
 - Negative: Docker Desktop's VM claims roughly half the host's memory while
   running. Bringing up one service at a time is now a working constraint,
   not a preference.
+## Amendment, 2026-08-23: the container JVM is not the host JVM
+
+The first version of this ADR claimed the container and the host run the
+same JVM, so measurements taken in one are comparable with the other. That
+was wrong, and checking it took one command:
+
+| | JVM |
+|---|---|
+| Host, pinned by ADR-002 | `21.0.12.1`, 2026-08-18 |
+| Container, `eclipse-temurin:21-jre` | `21.0.12`, 2026-07-21 |
+
+Already different builds, a month apart — and the tag would have kept
+moving. The claim was not merely unproven; it was false at the moment it
+was written.
+
+Two things follow. Base images are now pinned by digest, so an image
+rebuilt next month is the image built today. And the honest position is
+narrower than the original claim: the host and the container run *closely
+related but distinct* HotSpot 21 builds, so a containerised measurement is
+comparable with another containerised measurement, and a host measurement
+with another host measurement — but the two sets are not interchangeable
+without saying so.
+
+`experiments/environment-baseline.md` already requires the exact
+`java -version` string in every recorded run, which is what makes this
+tractable: the JVM is captured per run rather than assumed. Any Pillar A
+comparison must be run entirely inside containers or entirely outside, and
+must say which.
+
 - Revisit if: the container images need to be published anywhere, at which
   point their size stops being a local inconvenience.
