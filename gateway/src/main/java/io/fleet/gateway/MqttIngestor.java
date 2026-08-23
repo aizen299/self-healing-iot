@@ -1,5 +1,6 @@
 package io.fleet.gateway;
 
+import io.fleet.common.FleetTopic;
 import io.fleet.common.Presence;
 import io.fleet.common.Telemetry;
 import io.fleet.common.TelemetryValidator;
@@ -15,14 +16,15 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Subscribes to the fleet's topics and feeds the registry.
  *
- * <p>Nothing thrown from a message callback may escape: Paho would log it and
- * carry on, and the gateway would appear healthy while quietly dropping every
- * message of that shape. Each failure is instead classified, counted, and
- * logged with the topic that caused it.
+ * <p>Nothing thrown from a message callback may escape. Paho catches whatever
+ * does, logs it, and carries on — so the gateway would keep reporting itself
+ * healthy while silently dropping every message of that shape. Each failure is
+ * instead classified, counted, and logged with the topic that caused it.
  */
 public final class MqttIngestor implements MqttCallback, AutoCloseable {
 
@@ -46,24 +48,35 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
         try {
             this.client = new MqttClient(
                     config.brokerUrl(), config.clientId(), new MemoryPersistence());
+            // Bounds every synchronous call. Without it a half-open connection
+            // lets connect or disconnect hang indefinitely — and a gateway that
+            // hangs against a sick broker is worse than a device doing the
+            // same, since the gateway is what is supposed to notice.
+            this.client.setTimeToWait(
+                    TimeUnit.SECONDS.toMillis(config.operationTimeoutSeconds()));
         } catch (MqttException e) {
             throw new IllegalStateException("could not create the gateway MQTT client", e);
         }
     }
 
     /** Connects and subscribes to telemetry and presence for the whole fleet. */
-    public void start() throws MqttException {
+    public void start() throws IngestException {
         MqttConnectOptions options = new MqttConnectOptions();
         options.setCleanSession(config.cleanSession());
         options.setKeepAliveInterval(config.keepAliveSeconds());
         options.setConnectionTimeout(config.connectionTimeoutSeconds());
         options.setAutomaticReconnect(true);
 
-        client.setCallback(this);
-        client.connect(options);
-        client.subscribe(
-                new String[] {Topics.allDevices("telemetry"), Topics.allDevices("status")},
-                new int[] {config.subscriptionQos(), config.subscriptionQos()});
+        try {
+            client.setCallback(this);
+            client.connect(options);
+            client.subscribe(
+                    new String[] {Topics.allDevices("telemetry"), Topics.allDevices("status")},
+                    new int[] {config.subscriptionQos(), config.subscriptionQos()});
+        } catch (MqttException e) {
+            throw new IngestException(
+                    "gateway could not subscribe at " + config.brokerUrl(), e);
+        }
 
         System.out.println("gateway subscribed to " + Topics.allDevices("telemetry")
                 + " and " + Topics.allDevices("status") + " at " + config.brokerUrl());
@@ -71,17 +84,28 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
 
     @Override
     public void messageArrived(String topic, MqttMessage message) {
-        String deviceId = Topics.deviceIdOf(topic);
-        String kind = Topics.kindOf(topic);
-        if (deviceId == null || kind == null) {
+        // The outer boundary that makes this class's promise real: no failure
+        // in parsing, validation, or bookkeeping may reach Paho, where it would
+        // become an unnoticed dropped message.
+        try {
+            dispatch(topic, message);
+        } catch (RuntimeException e) {
+            metrics.handlerError();
+            System.err.println("error handling a message on " + topic + ": " + e);
+        }
+    }
+
+    private void dispatch(String topic, MqttMessage message) {
+        FleetTopic parsed = FleetTopic.parse(topic);
+        if (parsed == null) {
             // A shared broker carries other publishers' traffic; an
             // unrecognised topic is data to count, not an error.
             metrics.unroutableMessage();
             return;
         }
-        switch (kind) {
-            case "telemetry" -> handleTelemetry(topic, deviceId, message.getPayload());
-            case "status" -> handlePresence(topic, deviceId, message.getPayload());
+        switch (parsed.kind()) {
+            case "telemetry" -> handleTelemetry(topic, parsed.deviceId(), message.getPayload());
+            case "status" -> handlePresence(topic, parsed.deviceId(), message.getPayload());
             default -> metrics.unroutableMessage();
         }
     }
@@ -132,7 +156,7 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
             registry.recordPresence(deviceId, Presence.valueOf(raw), clock.millis());
             metrics.presenceEvent();
         } catch (IllegalArgumentException e) {
-            metrics.unroutableMessage();
+            metrics.invalidPresence();
             System.err.println("unknown presence '" + raw + "' on " + topic);
         }
     }
@@ -149,13 +173,25 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
     }
 
     @Override
-    public void close() throws MqttException {
+    public void close() throws IngestException {
         try {
             if (client.isConnected()) {
-                client.disconnect();
+                client.disconnect(TimeUnit.SECONDS.toMillis(config.operationTimeoutSeconds()));
             }
+        } catch (MqttException e) {
+            throw new IngestException("gateway failed to disconnect cleanly", e);
         } finally {
+            closeQuietly();
+        }
+    }
+
+    private void closeQuietly() {
+        try {
             client.close();
+        } catch (MqttException e) {
+            // Reported, never swallowed. Throwing here would mask a disconnect
+            // failure already on its way up.
+            System.err.println("gateway failed to close its MQTT client: " + e);
         }
     }
 }

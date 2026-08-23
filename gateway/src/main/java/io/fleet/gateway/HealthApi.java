@@ -3,6 +3,7 @@ package io.fleet.gateway;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import io.fleet.common.Telemetry;
 
@@ -45,8 +46,8 @@ public final class HealthApi implements AutoCloseable {
         this.metrics = metrics;
         this.server = HttpServer.create(
                 new InetSocketAddress(config.httpHost(), config.httpPort()), 0);
-        this.server.createContext("/health", this::handleHealth);
-        this.server.createContext("/devices", this::handleDevices);
+        this.server.createContext("/health", guarded(this::handleHealth));
+        this.server.createContext("/devices", guarded(this::handleDevices));
         this.server.setExecutor(Executors.newFixedThreadPool(2, runnable -> {
             Thread thread = new Thread(runnable, "gateway-http");
             thread.setDaemon(true);
@@ -78,6 +79,8 @@ public final class HealthApi implements AutoCloseable {
             generator.writeNumberField("telemetryInvalid", metrics.invalidCount());
             generator.writeNumberField("presenceEvents", metrics.presenceCount());
             generator.writeNumberField("unroutableMessages", metrics.unroutableCount());
+            generator.writeNumberField("invalidPresence", metrics.invalidPresenceCount());
+            generator.writeNumberField("handlerErrors", metrics.handlerErrorCount());
             generator.writeNumberField("connectionLosses", metrics.connectionLossCount());
             generator.writeEndObject();
         });
@@ -90,6 +93,20 @@ public final class HealthApi implements AutoCloseable {
         }
         String path = exchange.getRequestURI().getPath();
         String suffix = path.substring("/devices".length());
+
+        // HttpServer matches contexts by prefix, so /devicesfoo also lands
+        // here. Without requiring the separator, stripping a fixed character
+        // would turn that into a lookup for "oo" and answer 200 with a real
+        // device rather than 404.
+        if (!suffix.isEmpty() && !suffix.startsWith("/")) {
+            respond(exchange, 404, write(generator -> {
+                generator.writeStartObject();
+                generator.writeStringField("error", "not found");
+                generator.writeStringField("path", path);
+                generator.writeEndObject();
+            }));
+            return;
+        }
 
         if (suffix.isEmpty() || suffix.equals("/")) {
             List<DeviceRecord> all = registry.all();
@@ -152,6 +169,30 @@ public final class HealthApi implements AutoCloseable {
             generator.writeEndObject();
         }
         generator.writeEndObject();
+    }
+
+    /**
+     * Turns any failure inside a handler into a 500 rather than a dropped
+     * connection. HttpServer closes the exchange without a status line when a
+     * handler throws, and a health endpoint that fails by hanging up cannot be
+     * told apart from a network fault by whatever is monitoring it.
+     */
+    private HttpHandler guarded(HttpHandler delegate) {
+        return exchange -> {
+            try {
+                delegate.handle(exchange);
+            } catch (RuntimeException | IOException e) {
+                System.err.println("error serving " + exchange.getRequestURI() + ": " + e);
+                try {
+                    respond(exchange, 500, "{\"error\":\"internal error\"}"
+                            .getBytes(StandardCharsets.UTF_8));
+                } catch (IOException ignored) {
+                    // The client is already gone; nothing further to report.
+                }
+            } finally {
+                exchange.close();
+            }
+        };
     }
 
     private boolean rejectNonGet(HttpExchange exchange) throws IOException {

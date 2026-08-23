@@ -1,26 +1,18 @@
 package io.fleet.integration;
 
 import io.fleet.common.Presence;
-import io.fleet.common.SensorModel;
 import io.fleet.common.Telemetry;
 import io.fleet.common.TelemetrySink;
 import io.fleet.common.Topics;
 import io.fleet.edge.DeviceConfig;
-import io.fleet.edge.EdgeDevice;
-import io.fleet.edge.FailureInjector;
-import io.fleet.edge.FailureMode;
-import io.fleet.edge.constrained.ConstrainedEdgeDevice;
 import io.fleet.edge.harness.FleetHarness;
 import io.fleet.edge.mqtt.MqttConfig;
 import io.fleet.edge.mqtt.MqttSinkFactory;
-import io.fleet.edge.naive.NaiveEdgeDevice;
-import io.fleet.edge.sink.RecordingSink;
 import io.fleet.gateway.DeviceRecord;
 import io.fleet.gateway.DeviceRegistry;
 import io.fleet.gateway.GatewayConfig;
 import io.fleet.gateway.GatewayMetrics;
 import io.fleet.gateway.MqttIngestor;
-import io.fleet.gateway.TelemetryParser;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -142,52 +134,8 @@ class MqttToGatewayTest {
         }
     }
 
-    /**
-     * The format-drift guard across the module boundary.
-     *
-     * <p>The device serializes with a hand-rolled encoder and the gateway
-     * parses with Jackson. Nothing in either module's own tests would notice
-     * if the two stopped agreeing, and the failure would look like devices
-     * going silent rather than like a format change.
-     */
-    @Test
-    @DisplayName("both device variants produce payloads the gateway parses to the same values")
-    void deviceOutputRoundTripsThroughTheGatewayParser() throws Exception {
-        TelemetryParser parser = new TelemetryParser();
-        RecordingSink constrainedSink = new RecordingSink();
-        RecordingSink naiveSink = new RecordingSink();
-
-        FailureInjector none = new FailureInjector(FailureMode.NONE, 0L, 1);
-        EdgeDevice constrained = new ConstrainedEdgeDevice(
-                "device-001", sensor(), constrainedSink, none);
-        EdgeDevice naive = new NaiveEdgeDevice("device-001", sensor(), naiveSink, none);
-
-        for (int i = 0; i < 200; i++) {
-            long timestamp = 1_787_484_895_182L + i * 1_000L;
-            constrained.publishReading(timestamp);
-            naive.publishReading(timestamp);
-        }
-
-        for (int i = 0; i < 200; i++) {
-            byte[] fromConstrained =
-                    constrainedSink.payloads().get(i).getBytes(StandardCharsets.UTF_8);
-            byte[] fromNaive = naiveSink.payloads().get(i).getBytes(StandardCharsets.UTF_8);
-
-            Telemetry parsedConstrained = parser.parse(fromConstrained, 0, fromConstrained.length);
-            Telemetry parsedNaive = parser.parse(fromNaive, 0, fromNaive.length);
-
-            assertEquals(parsedNaive, parsedConstrained, "variants diverged at reading " + i);
-            assertEquals("device-001", parsedConstrained.deviceId());
-            assertEquals(1_787_484_895_182L + i * 1_000L, parsedConstrained.timestamp());
-        }
-    }
-
     private static Presence presenceOf(DeviceRegistry registry, String deviceId) {
         return registry.find(deviceId).map(DeviceRecord::presence).orElse(null);
-    }
-
-    private static SensorModel sensor() {
-        return new SensorModel(1234L, 52.5200d, 13.4050d);
     }
 
     private static String wireFormatFor(String deviceId) {

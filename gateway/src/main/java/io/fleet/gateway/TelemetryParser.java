@@ -16,14 +16,19 @@ import java.io.IOException;
  * control over what counts as malformed — which matters because rejecting bad
  * input correctly is one of the gateway's jobs, not an afterthought.
  *
- * <p>Unknown fields are skipped rather than rejected, so a later phase can
- * add a field without every existing consumer failing. Missing or duplicated
- * known fields are rejected, because a reading that silently defaults a
- * temperature to zero is worse than one that never arrives.
+ * <p>Unknown fields are skipped, so a later phase can add a field without
+ * every existing consumer failing. A known field that is missing, duplicated,
+ * or carries a structured value is rejected: a reading that silently defaults
+ * a temperature to zero, or quietly keeps the second of two, is worse than one
+ * that never arrives.
  *
  * <p>Thread-safe: {@link JsonFactory} is, and no state is kept between calls.
  */
 public final class TelemetryParser {
+
+    private static final String[] FIELD_NAMES =
+            {"deviceId", "ts", "temp", "vib", "batt", "lat", "lon", "status"};
+    private static final int ALL_FIELDS = (1 << FIELD_NAMES.length) - 1;
 
     private final JsonFactory factory = new JsonFactory();
 
@@ -46,40 +51,45 @@ public final class TelemetryParser {
             }
             while (parser.nextToken() != JsonToken.END_OBJECT) {
                 String field = parser.currentName();
-                parser.nextToken();
+                if (field == null) {
+                    throw new MalformedPayloadException("expected a field name");
+                }
+                JsonToken value = parser.nextToken();
                 switch (field) {
                     case "deviceId" -> {
+                        seen = mark(seen, 0, parser, value);
                         deviceId = parser.getValueAsString();
-                        seen |= 1;
                     }
                     case "ts" -> {
+                        seen = mark(seen, 1, parser, value);
                         timestamp = parser.getLongValue();
-                        seen |= 1 << 1;
                     }
                     case "temp" -> {
+                        seen = mark(seen, 2, parser, value);
                         temperature = parser.getDoubleValue();
-                        seen |= 1 << 2;
                     }
                     case "vib" -> {
+                        seen = mark(seen, 3, parser, value);
                         vibration = parser.getDoubleValue();
-                        seen |= 1 << 3;
                     }
                     case "batt" -> {
+                        seen = mark(seen, 4, parser, value);
                         batteryLevel = parser.getDoubleValue();
-                        seen |= 1 << 4;
                     }
                     case "lat" -> {
+                        seen = mark(seen, 5, parser, value);
                         latitude = parser.getDoubleValue();
-                        seen |= 1 << 5;
                     }
                     case "lon" -> {
+                        seen = mark(seen, 6, parser, value);
                         longitude = parser.getDoubleValue();
-                        seen |= 1 << 6;
                     }
                     case "status" -> {
+                        seen = mark(seen, 7, parser, value);
                         status = parseStatus(parser.getValueAsString());
-                        seen |= 1 << 7;
                     }
+                    // Unknown fields are skipped whole, structure included, so
+                    // the cursor stays on the top-level object.
                     default -> parser.skipChildren();
                 }
             }
@@ -87,12 +97,40 @@ public final class TelemetryParser {
             throw new MalformedPayloadException("payload is not valid JSON: " + e.getMessage(), e);
         }
 
-        if (seen != 0xFF) {
+        if (seen != ALL_FIELDS) {
             throw new MalformedPayloadException("payload is missing fields: " + missing(seen));
+        }
+        if (deviceId == null) {
+            throw new MalformedPayloadException("deviceId is null");
         }
         return new Telemetry(
                 deviceId, timestamp, temperature, vibration, batteryLevel,
                 latitude, longitude, status);
+    }
+
+    /**
+     * Records that a known field was seen, rejecting a repeat and rejecting a
+     * structured value.
+     *
+     * <p>The structure check is the important one. Without it, reading an
+     * object-valued field with a scalar getter leaves the cursor <em>inside</em>
+     * that object, and its keys are then consumed as though they were
+     * top-level — so {@code {"deviceId":{"deviceId":"x","ts":1,…}}} would parse
+     * into a complete, entirely fabricated reading.
+     */
+    private static int mark(int seen, int index, JsonParser parser, JsonToken value)
+            throws MalformedPayloadException, IOException {
+
+        if ((seen & (1 << index)) != 0) {
+            throw new MalformedPayloadException(
+                    "duplicate field '" + FIELD_NAMES[index] + "'");
+        }
+        if (value == null || value.isStructStart()) {
+            parser.skipChildren();
+            throw new MalformedPayloadException(
+                    "field '" + FIELD_NAMES[index] + "' must be a scalar value");
+        }
+        return seen | (1 << index);
     }
 
     private static DeviceStatus parseStatus(String raw) throws MalformedPayloadException {
@@ -107,14 +145,13 @@ public final class TelemetryParser {
     }
 
     private static String missing(int seen) {
-        String[] names = {"deviceId", "ts", "temp", "vib", "batt", "lat", "lon", "status"};
         StringBuilder absent = new StringBuilder();
-        for (int i = 0; i < names.length; i++) {
+        for (int i = 0; i < FIELD_NAMES.length; i++) {
             if ((seen & (1 << i)) == 0) {
                 if (absent.length() > 0) {
                     absent.append(", ");
                 }
-                absent.append(names[i]);
+                absent.append(FIELD_NAMES[i]);
             }
         }
         return absent.toString();
