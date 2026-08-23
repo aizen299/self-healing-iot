@@ -102,6 +102,24 @@ class DeviceConfigTest {
     }
 
     @Test
+    void rejectsValuesTooLargeForAnIntRatherThanWrappingThem() {
+        // A bare (int) cast turns this into 1, which passes every range check
+        // that follows and silently runs a one-device fleet.
+        ConfigurationException error = assertThrows(ConfigurationException.class,
+                () -> DeviceConfig.from(Map.of("FLEET_DEVICE_COUNT", "4294967297")));
+        assertTrue(error.getMessage().contains("32-bit"), error.getMessage());
+    }
+
+    @Test
+    void rejectsADeviceIdPrefixThatWouldOverflowThePayloadBuffer() {
+        String prefix = "n".repeat(DeviceConfig.MAX_DEVICE_ID_PREFIX_LENGTH + 1);
+
+        ConfigurationException error = assertThrows(ConfigurationException.class,
+                () -> DeviceConfig.from(Map.of("FLEET_DEVICE_ID_PREFIX", prefix)));
+        assertTrue(error.getMessage().contains("deviceIdPrefix"), error.getMessage());
+    }
+
+    @Test
     void rejectsOutOfRangeCoordinates() {
         assertThrows(ConfigurationException.class,
                 () -> DeviceConfig.from(Map.of("FLEET_BASE_LAT", "91")));

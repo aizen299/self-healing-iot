@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FleetHarnessTest {
@@ -76,6 +77,28 @@ class FleetHarnessTest {
             // Two normal ticks, then 5 readings per tick.
             assertTrue(sink.payloadCount() >= 12L,
                     "flood should outpace the base rate, got " + sink.payloadCount());
+        }
+    }
+
+    @Test
+    void startingTwiceIsRejected() {
+        DeviceConfig config = DeviceConfig.from(Map.of("FLEET_DEVICE_COUNT", "1"));
+
+        try (FleetHarness harness = new FleetHarness(config, new CountingSink())) {
+            harness.start();
+            // Double-scheduling would roughly double the real publish rate
+            // while the run still reported the configured one.
+            assertThrows(IllegalStateException.class, harness::start);
+        }
+    }
+
+    @Test
+    void durationIsNotEpochSizedBeforeStart() {
+        DeviceConfig config = DeviceConfig.from(Map.of("FLEET_DEVICE_COUNT", "1"));
+
+        try (FleetHarness harness = new FleetHarness(config, new CountingSink())) {
+            assertTrue(harness.result().durationMillis() < 60_000L,
+                    "an unstarted harness must not report the whole Unix epoch as its duration");
         }
     }
 

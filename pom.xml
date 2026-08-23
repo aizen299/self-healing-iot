@@ -29,6 +29,14 @@
     <junit.version>5.10.3</junit.version>
     <surefire.version>3.2.5</surefire.version>
     <enforcer.version>3.4.1</enforcer.version>
+
+    <!-- Pinned for the same reason as the JDK (ADR-002): left to Maven's
+         default lifecycle bindings, the plugin that compiles the bytecode
+         being measured would change with the installed Maven version, so an
+         experiment could be recompiled by a different compiler than the run
+         it is compared against. -->
+    <compiler.plugin.version>3.15.0</compiler.plugin.version>
+    <resources.plugin.version>3.4.0</resources.plugin.version>
   </properties>
 
   <dependencyManagement>
@@ -63,6 +71,16 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>${surefire.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${compiler.plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-resources-plugin</artifactId>
+          <version>${resources.plugin.version}</version>
         </plugin>
       </plugins>
     </pluginManagement>

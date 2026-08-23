@@ -147,7 +147,8 @@ duplicate the wire format.
 | `experiments/` | `configs/`, `scripts/`, `results/{raw,processed}/` — see reproducibility contract below |
 | `docs/decisions/` | ADRs (numbered `ADR-NNN-*.md`) for major architecture decisions |
 | `docs/architecture/`, `docs/api/`, `docs/experiments/` | Architecture docs, gateway API docs, experiment writeups — written to describe what exists, not what's planned |
-| `tests/unit`, `tests/integration`, `tests/e2e` | Cross-module suites — see testing requirements below |
+| `tests/integration`, `tests/e2e` | Cross-module suites — see testing requirements below |
+| `tests/unit` | Reserved for cross-module unit-level suites; currently empty. Per-module unit tests live in each module's `src/test/java` |
 
 Each module's own `README.md` is the source of truth for that module's
 current implementation status; keep it updated as phases land there.
@@ -162,8 +163,14 @@ Charts are generated from collected data, never from assumptions.
 
 ## Testing requirements
 
-- **Unit** (`tests/unit`): telemetry validation, heartbeat logic, failure
-  state transitions, recovery decision logic, configuration validation.
+- **Unit** (each module's own `src/test/java`, *not* `tests/unit`):
+  telemetry validation, heartbeat logic, failure state transitions,
+  recovery decision logic, configuration validation. Unit tests live
+  beside the code they cover so `mvn test` in a module actually verifies
+  that module — moving them to a top-level directory would break the
+  independently-buildable modules ADR-001 is built around. `tests/unit`
+  stays for genuinely cross-module unit-level suites, and is currently
+  empty; see `tests/unit/README.md`.
 - **Integration** (`tests/integration`): MQTT→Gateway, Gateway→Kafka,
   Kafka→storage, failure event→recovery.
 - **E2E** (`tests/e2e`): the project's core reproducible demo — start

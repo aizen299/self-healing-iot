@@ -51,8 +51,18 @@ public final class SensorModel {
         temperature = MIN_TEMPERATURE_C + nextUnit() * TEMPERATURE_RANGE_C;
         vibration = nextUnit() * MAX_VIBRATION;
         batteryLevel = Math.max(0.0, batteryLevel - BATTERY_DRAIN_PER_READING);
-        latitude = baseLatitude + (nextUnit() - 0.5) * COORDINATE_JITTER_DEGREES;
-        longitude = baseLongitude + (nextUnit() - 0.5) * COORDINATE_JITTER_DEGREES;
+        // Clamped: a fleet centred on a pole or the antimeridian is a legal
+        // configuration, and unclamped jitter would push readings past the
+        // limits TelemetryValidator enforces, so the gateway would discard
+        // every reading from Phase 3 onward as if the fleet had failed.
+        latitude = clamp(
+                baseLatitude + (nextUnit() - 0.5) * COORDINATE_JITTER_DEGREES, -90.0, 90.0);
+        longitude = clamp(
+                baseLongitude + (nextUnit() - 0.5) * COORDINATE_JITTER_DEGREES, -180.0, 180.0);
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.min(max, Math.max(min, value));
     }
 
     public double temperature() {

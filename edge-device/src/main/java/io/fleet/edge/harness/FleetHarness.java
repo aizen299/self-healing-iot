@@ -7,6 +7,7 @@ import io.fleet.edge.DeviceCrashedException;
 import io.fleet.edge.EdgeDevice;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,7 +18,6 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.function.LongSupplier;
 
 /**
  * Runs a fleet of devices inside one JVM.
@@ -35,25 +35,23 @@ public final class FleetHarness implements AutoCloseable {
     private final DeviceConfig config;
     private final List<EdgeDevice> devices;
     private final ScheduledExecutorService scheduler;
-    private final LongSupplier clock;
 
     private final Set<String> crashedDevices = ConcurrentHashMap.newKeySet();
     private final LongAdder sinkErrors = new LongAdder();
     private final LongAdder unexpectedErrors = new LongAdder();
 
-    private long startedAtMillis;
+    private volatile boolean started;
+    private volatile long startedAtMillis;
 
     public FleetHarness(DeviceConfig config, TelemetrySink sink) {
-        this(config, sink, System::currentTimeMillis);
-    }
-
-    /** @param clock injectable so tests need not depend on wall-clock time */
-    public FleetHarness(DeviceConfig config, TelemetrySink sink, LongSupplier clock) {
         this.config = config;
-        this.clock = clock;
         this.devices = DeviceFactory.createFleet(config, sink);
         int threads = config.variant().threadCount(config.deviceCount());
         this.scheduler = Executors.newScheduledThreadPool(threads, namedThreads());
+        // Seeded at construction so result() before start() reports a
+        // near-zero duration instead of the whole Unix epoch, which would look
+        // like a completed run at approximately zero throughput.
+        this.startedAtMillis = System.currentTimeMillis();
     }
 
     /**
@@ -65,7 +63,14 @@ public final class FleetHarness implements AutoCloseable {
      * would dominate any latency measurement.
      */
     public void start() {
-        startedAtMillis = clock.getAsLong();
+        if (started) {
+            // Starting twice would put every device on two independent fixed-rate
+            // timers, doubling the real publish rate while the run still reports
+            // the configured one — a silently inflated throughput figure.
+            throw new IllegalStateException("harness already started");
+        }
+        started = true;
+        startedAtMillis = System.currentTimeMillis();
         long interval = config.publishIntervalMillis();
         long stagger = Math.max(1L, interval / Math.max(1, devices.size()));
 
@@ -101,13 +106,19 @@ public final class FleetHarness implements AutoCloseable {
         for (EdgeDevice device : devices) {
             readings += device.readingsPublished();
         }
+        // Sorted because the backing set's iteration order varies between
+        // otherwise identical runs, and a result field that does not reproduce
+        // undermines the point of the reproducibility contract.
+        List<String> crashed = new ArrayList<>(crashedDevices);
+        Collections.sort(crashed);
+
         return new FleetRunResult(
                 devices.size(),
                 readings,
-                new ArrayList<>(crashedDevices),
+                crashed,
                 sinkErrors.sum(),
                 unexpectedErrors.sum(),
-                clock.getAsLong() - startedAtMillis);
+                System.currentTimeMillis() - startedAtMillis);
     }
 
     public List<EdgeDevice> devices() {
@@ -151,7 +162,7 @@ public final class FleetHarness implements AutoCloseable {
         @Override
         public void run() {
             try {
-                device.publishReading(clock.getAsLong());
+                device.publishReading(System.currentTimeMillis());
             } catch (DeviceCrashedException e) {
                 crashedDevices.add(device.deviceId());
                 cancelSelf();

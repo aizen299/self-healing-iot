@@ -23,11 +23,16 @@ public final class Main {
 
     public static void main(String[] args) throws InterruptedException {
         DeviceConfig config = DeviceConfig.fromEnv();
-        CountingSink sink = new CountingSink();
 
         printHeader(config);
 
-        try (FleetHarness harness = new FleetHarness(config, sink)) {
+        // Declared in this order so the harness closes first and the sink
+        // second: devices must stop publishing before the transport that
+        // carries their payloads is released. From Phase 2 the sink holds a
+        // broker connection, and skipping its close would drop the session
+        // without a DISCONNECT.
+        try (CountingSink sink = new CountingSink();
+             FleetHarness harness = new FleetHarness(config, sink)) {
             Runtime.getRuntime().addShutdownHook(new Thread(harness::close, "fleet-shutdown"));
 
             GcSnapshot before = GcSnapshot.capture();
