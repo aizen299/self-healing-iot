@@ -19,6 +19,12 @@ import java.util.Map;
  * @param httpHost                 bind address for the health API
  * @param httpPort                 port for the health API; 0 picks a free one
  * @param runDurationSeconds       stop after this long; 0 means run until interrupted
+ * @param heartbeatIntervalMillis  expected heartbeat period; must match the fleet's
+ *                                 publish interval, since heartbeats ride that tick
+ * @param suspectAfterMisses       misses before a device becomes suspect
+ * @param offlineAfterMisses       misses before a device is declared failed
+ * @param recoveryConfirmations    heartbeats a recovering device must deliver
+ * @param monitorIntervalMillis    how often the silence sweep runs
  */
 public record GatewayConfig(
         String brokerUrl,
@@ -30,7 +36,12 @@ public record GatewayConfig(
         boolean cleanSession,
         String httpHost,
         int httpPort,
-        long runDurationSeconds) {
+        long runDurationSeconds,
+        long heartbeatIntervalMillis,
+        int suspectAfterMisses,
+        int offlineAfterMisses,
+        int recoveryConfirmations,
+        long monitorIntervalMillis) {
 
     public GatewayConfig {
         BrokerUrl.validate("MQTT_BROKER_URL", brokerUrl);
@@ -61,6 +72,25 @@ public record GatewayConfig(
             throw new ConfigurationException(
                     "GATEWAY_RUN_DURATION_SECONDS must be >= 0, got " + runDurationSeconds);
         }
+        if (monitorIntervalMillis < 1) {
+            throw new ConfigurationException(
+                    "GATEWAY_MONITOR_INTERVAL_MS must be >= 1, got " + monitorIntervalMillis);
+        }
+        // Validates the detection thresholds by constructing the policy, so
+        // the rules live in one place rather than being restated here.
+        //
+        // Built from the constructor parameters, not via healthPolicy(): in a
+        // record's compact constructor the fields are not assigned until the
+        // body completes, so an instance method called from here would read
+        // zeros and validate nothing.
+        new HealthPolicy(heartbeatIntervalMillis, suspectAfterMisses,
+                offlineAfterMisses, recoveryConfirmations);
+    }
+
+    /** The detection rules implied by this configuration. */
+    public HealthPolicy healthPolicy() {
+        return new HealthPolicy(heartbeatIntervalMillis, suspectAfterMisses,
+                offlineAfterMisses, recoveryConfirmations);
     }
 
     public static GatewayConfig fromEnv() {
@@ -78,6 +108,11 @@ public record GatewayConfig(
                 Env.booleanValue(env, "MQTT_CLEAN_SESSION", true),
                 Env.string(env, "GATEWAY_HTTP_HOST", "127.0.0.1"),
                 Env.intValue(env, "GATEWAY_HTTP_PORT", 8080),
-                Env.longValue(env, "GATEWAY_RUN_DURATION_SECONDS", 0L));
+                Env.longValue(env, "GATEWAY_RUN_DURATION_SECONDS", 0L),
+                Env.longValue(env, "GATEWAY_HEARTBEAT_INTERVAL_MS", 1000L),
+                Env.intValue(env, "GATEWAY_SUSPECT_AFTER_MISSES", 2),
+                Env.intValue(env, "GATEWAY_OFFLINE_AFTER_MISSES", 4),
+                Env.intValue(env, "GATEWAY_RECOVERY_CONFIRMATIONS", 2),
+                Env.longValue(env, "GATEWAY_MONITOR_INTERVAL_MS", 250L));
     }
 }

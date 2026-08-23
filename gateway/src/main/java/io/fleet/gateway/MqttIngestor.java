@@ -1,5 +1,8 @@
 package io.fleet.gateway;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
+import io.fleet.common.DeviceEventType;
 import io.fleet.common.FleetTopic;
 import io.fleet.common.Presence;
 import io.fleet.common.Telemetry;
@@ -14,9 +17,13 @@ import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * Subscribes to the fleet's topics and feeds the registry.
@@ -26,12 +33,24 @@ import java.util.concurrent.TimeUnit;
  * healthy while silently dropping every message of that shape. Each failure is
  * instead classified, counted, and logged with the topic that caused it.
  */
-public final class MqttIngestor implements MqttCallback, AutoCloseable {
+public final class MqttIngestor implements MqttCallback, EventPublisher, AutoCloseable {
+
+    private static final int EVENT_QOS = 1;
 
     private final GatewayConfig config;
     private final DeviceRegistry registry;
     private final GatewayMetrics metrics;
     private final TelemetryParser parser = new TelemetryParser();
+    private final HeartbeatParser heartbeatParser = new HeartbeatParser();
+    private final JsonFactory json = new JsonFactory();
+    private final HealthPolicy policy;
+    /**
+     * Set after construction to break a genuine cycle: the monitor announces
+     * transitions through this class as its EventPublisher, and this class
+     * produces transitions the monitor must announce. A setter states that
+     * plainly rather than hiding it behind a supplier.
+     */
+    private volatile Consumer<HealthTransition> onTransition = transition -> { };
     private final Clock clock;
     private final MqttClient client;
 
@@ -45,6 +64,7 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
         this.registry = registry;
         this.metrics = metrics;
         this.clock = clock;
+        this.policy = config.healthPolicy();
         try {
             this.client = new MqttClient(
                     config.brokerUrl(), config.clientId(), new MemoryPersistence());
@@ -59,7 +79,12 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
         }
     }
 
-    /** Connects and subscribes to telemetry and presence for the whole fleet. */
+    /** Routes health transitions this ingestor observes; see the field's note. */
+    public void onTransition(Consumer<HealthTransition> listener) {
+        this.onTransition = listener;
+    }
+
+    /** Connects and subscribes to telemetry, heartbeats, and presence. */
     public void start() throws IngestException {
         MqttConnectOptions options = new MqttConnectOptions();
         options.setCleanSession(config.cleanSession());
@@ -71,15 +96,21 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
             client.setCallback(this);
             client.connect(options);
             client.subscribe(
-                    new String[] {Topics.allDevices("telemetry"), Topics.allDevices("status")},
-                    new int[] {config.subscriptionQos(), config.subscriptionQos()});
+                    new String[] {
+                        Topics.allDevices("telemetry"),
+                        Topics.allDevices("heartbeat"),
+                        Topics.allDevices("status")},
+                    new int[] {
+                        config.subscriptionQos(),
+                        config.subscriptionQos(),
+                        config.subscriptionQos()});
         } catch (MqttException e) {
             throw new IngestException(
                     "gateway could not subscribe at " + config.brokerUrl(), e);
         }
 
-        System.out.println("gateway subscribed to " + Topics.allDevices("telemetry")
-                + " and " + Topics.allDevices("status") + " at " + config.brokerUrl());
+        System.out.println("gateway subscribed to telemetry, heartbeat, and status for "
+                + Topics.allDevices("*") + " at " + config.brokerUrl());
     }
 
     @Override
@@ -105,6 +136,7 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
         }
         switch (parsed.kind()) {
             case "telemetry" -> handleTelemetry(topic, parsed.deviceId(), message.getPayload());
+            case "heartbeat" -> handleHeartbeat(topic, parsed.deviceId(), message.getPayload());
             case "status" -> handlePresence(topic, parsed.deviceId(), message.getPayload());
             default -> metrics.unroutableMessage();
         }
@@ -145,6 +177,32 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
         metrics.telemetryAccepted();
     }
 
+    private void handleHeartbeat(String topic, String deviceId, byte[] payload) {
+        try {
+            var heartbeat = heartbeatParser.parse(payload, 0, payload.length);
+            if (!deviceId.equals(heartbeat.deviceId())) {
+                // Accepting this would let one device assert liveness on
+                // another's behalf, which is the one lie that would defeat
+                // failure detection entirely.
+                metrics.heartbeatMalformed();
+                System.err.println("rejected heartbeat on " + topic
+                        + ": body claims deviceId '" + heartbeat.deviceId() + "'");
+                return;
+            }
+        } catch (MalformedPayloadException e) {
+            metrics.heartbeatMalformed();
+            System.err.println("rejected malformed heartbeat on " + topic + ": " + e.getMessage());
+            return;
+        }
+
+        metrics.heartbeatAccepted();
+        // Receipt time, not the device's clock: a wedged device may be wrong
+        // about the time, and a clock jump must not buy it a reprieve.
+        Optional<HealthTransition> transition =
+                registry.recordHeartbeat(deviceId, clock.millis(), policy);
+        transition.ifPresent(onTransition);
+    }
+
     private void handlePresence(String topic, String deviceId, byte[] payload) {
         String raw = new String(payload, StandardCharsets.UTF_8).trim();
         if (raw.isEmpty()) {
@@ -159,6 +217,67 @@ public final class MqttIngestor implements MqttCallback, AutoCloseable {
             metrics.invalidPresence();
             System.err.println("unknown presence '" + raw + "' on " + topic);
         }
+    }
+
+    /**
+     * Publishes a transition on the device's events topic.
+     *
+     * <p>QoS 1, not retained. Recovery in Phase 9 acts on these, so losing one
+     * would leave a device failed and unattended — but an event is a moment
+     * rather than a state, and retaining it would replay old failures to every
+     * new subscriber.
+     *
+     * <p>Never throws: a failure to announce must not stop the sweep that
+     * produced it, or one unreachable consumer would halt detection for the
+     * whole fleet.
+     */
+    @Override
+    public void publish(HealthTransition transition) {
+        DeviceEventType type = eventTypeOf(transition);
+        if (type == null) {
+            return;
+        }
+        try {
+            client.publish(Topics.events(transition.deviceId()),
+                    encodeEvent(transition, type), EVENT_QOS, false);
+        } catch (MqttException | IOException | RuntimeException e) {
+            metrics.eventPublishFailure();
+            System.err.println("could not publish " + type + " for "
+                    + transition.deviceId() + ": " + e);
+        }
+    }
+
+    /**
+     * Only transitions something downstream must act on become events.
+     * Suspicion is the detector hedging against a lost QoS 0 message, and
+     * announcing it would invite consumers to react to what is explicitly not
+     * yet a failure.
+     */
+    private static DeviceEventType eventTypeOf(HealthTransition transition) {
+        return switch (transition.to()) {
+            case OFFLINE -> DeviceEventType.DEVICE_OFFLINE;
+            case RECOVERING -> DeviceEventType.DEVICE_RECOVERING;
+            case ONLINE -> transition.isRecovery() ? DeviceEventType.DEVICE_RECOVERED : null;
+            case SUSPECTED, UNKNOWN -> null;
+        };
+    }
+
+    private byte[] encodeEvent(HealthTransition transition, DeviceEventType type)
+            throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(192);
+        try (JsonGenerator generator = json.createGenerator(out)) {
+            generator.writeStartObject();
+            generator.writeStringField("deviceId", transition.deviceId());
+            generator.writeStringField("event", type.name());
+            generator.writeStringField("from", transition.from().name());
+            generator.writeStringField("to", transition.to().name());
+            generator.writeNumberField("at", transition.atMillis());
+            generator.writeNumberField("missedHeartbeats", transition.missedHeartbeats());
+            generator.writeNumberField("recoveryDurationMillis",
+                    transition.recoveryDurationMillis());
+            generator.writeEndObject();
+        }
+        return out.toByteArray();
     }
 
     @Override

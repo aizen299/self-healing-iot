@@ -76,9 +76,9 @@ and current implementation status.
 
 ## Status
 
-**Phases 1–3 complete — devices publishing over MQTT into a gateway.**
+**Phases 1–4 complete — a fleet whose failures are detected automatically.**
 `common/`, `edge-device/`, and `gateway/` are implemented, tested, and
-runnable; 90 tests pass. The remaining modules are still scaffolding.
+runnable; 115 tests pass. The remaining modules are still scaffolding.
 
 The simulator runs a fleet of 50 devices in two variants — a
 resource-disciplined one and a conventional baseline — producing an
@@ -92,8 +92,15 @@ Phase 4's failure detection will consume; the wire contract is in
 [`docs/api/mqtt-topics.md`](docs/api/mqtt-topics.md).
 
 The gateway subscribes to the whole fleet, validates every reading, tracks
-per-device state, and serves it over HTTP. It does not yet detect failures
-— heartbeat timeouts and the device state machine are Phase 4.
+per-device state, and serves it over HTTP.
+
+It also **detects failures**, via two complementary paths. The broker's Last
+Will catches a device that dies or loses its network. A heartbeat timeout
+catches the case the will structurally cannot see: a device that stays
+connected and keeps publishing telemetry while its liveness path has wedged.
+Devices walk `ONLINE → SUSPECTED → OFFLINE → RECOVERING → ONLINE`, and
+failures are announced on `fleet/{id}/events` for Phase 9's recovery to act
+on. See [ADR-006](docs/decisions/ADR-006-failure-detection.md).
 
 ## Development phases
 
@@ -104,7 +111,7 @@ working, tested demonstration. This numbering is canonical and matches
 - [x] Phase 1 — Java edge simulator
 - [x] Phase 2 — MQTT communication
 - [x] Phase 3 — Java gateway
-- [ ] Phase 4 — Heartbeat / failure detection
+- [x] Phase 4 — Heartbeat / failure detection
 - [ ] Phase 5 — Persistent telemetry
 - [ ] Phase 6 — Kafka streaming
 - [ ] Phase 7 — Containerization (Docker)

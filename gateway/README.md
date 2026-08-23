@@ -3,10 +3,9 @@
 Java MQTT gateway. Subscribes to device topics, validates and deserializes
 telemetry, tracks per-device state, and exposes a health/status API.
 
-**Status:** Phase 3 complete — ingestion, validation, the device registry,
-and the HTTP API. Heartbeat timeouts and the device state machine
-(`ONLINE -> SUSPECTED -> OFFLINE -> RECOVERING`) arrive in Phase 4;
-forwarding to Kafka in Phase 6.
+**Status:** Phases 3–4 complete — ingestion, validation, the device
+registry, the HTTP API, and automatic failure detection. Forwarding to
+Kafka arrives in Phase 6.
 
 Two runtime dependencies — the Paho MQTT client and Jackson's streaming
 parser — and the JDK's own HTTP server rather than a web framework. See
@@ -44,6 +43,35 @@ different fault, and a single counter would hide which is happening:
 callback, logs it, and carries on. Without an explicit boundary and counter
 the gateway would report itself healthy while silently dropping every
 message of some shape.
+
+## Failure detection
+
+Two paths, because neither covers the other
+([ADR-006](../docs/decisions/ADR-006-failure-detection.md)):
+
+| Failure | Connection | Last Will | Heartbeat timeout |
+|---|---|---|---|
+| Power loss, kill, network cut | drops | **fires** | would also fire, later |
+| Wedged process, blocked loop | **stays up** | never fires | **fires** |
+
+The second row is why this phase exists. A device that stays connected and
+keeps publishing telemetry while its liveness path has wedged produces no
+Last Will at all — and **telemetry is deliberately not treated as proof of
+life**, or that fault would be undetectable.
+
+Devices walk `UNKNOWN → ONLINE → SUSPECTED → OFFLINE → RECOVERING → ONLINE`:
+
+- **SUSPECTED** exists because heartbeats travel at QoS 0, so one lost
+  message is expected traffic rather than a symptom. A policy configured to
+  condemn on a single miss is rejected at startup.
+- **RECOVERING** is probation, not "being recovered": a failed device must
+  deliver `GATEWAY_RECOVERY_CONFIRMATIONS` heartbeats before it is trusted.
+  A replacement provisioned in Phase 9 enters through this same path.
+- A device in **UNKNOWN** is never declared failed, however long it is
+  silent — which keeps retained-presence ghosts out of the recovery path.
+
+Transitions worth acting on are published to `fleet/{id}/events` at QoS 1.
+`ONLINE → SUSPECTED` is not among them.
 
 ## HTTP API
 
@@ -85,6 +113,11 @@ every stale retained entry becomes a phantom failure to recover.
 | `GATEWAY_HTTP_HOST` | `127.0.0.1` | Bind address |
 | `GATEWAY_HTTP_PORT` | `8080` | `0` picks a free port |
 | `GATEWAY_RUN_DURATION_SECONDS` | `0` | `0` runs until interrupted |
+| `GATEWAY_HEARTBEAT_INTERVAL_MS` | `1000` | **Must match the fleet's `FLEET_PUBLISH_INTERVAL_MS`** |
+| `GATEWAY_SUSPECT_AFTER_MISSES` | `2` | Minimum 2; one miss must never condemn |
+| `GATEWAY_OFFLINE_AFTER_MISSES` | `4` | Must exceed the suspect threshold |
+| `GATEWAY_RECOVERY_CONFIRMATIONS` | `2` | Heartbeats needed to leave probation |
+| `GATEWAY_MONITOR_INTERVAL_MS` | `250` | How often the silence sweep runs |
 | `MQTT_KEEPALIVE_SECONDS` | `60` | |
 | `MQTT_CONNECTION_TIMEOUT_SECONDS` | `10` | |
 | `MQTT_OPERATION_TIMEOUT_SECONDS` | `10` | Ceiling on any blocking client call |

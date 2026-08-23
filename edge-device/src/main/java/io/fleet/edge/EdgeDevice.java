@@ -24,6 +24,25 @@ public interface EdgeDevice {
      */
     void publishReading(long nowMillis) throws SinkException;
 
+    /**
+     * Publishes a liveness signal.
+     *
+     * <p>Called by the harness on the same tick as {@link #publishReading},
+     * on the same thread and before it. Sharing the tick keeps all of a
+     * device's work single-threaded: a separate heartbeat schedule would let
+     * two pool threads touch one device at once, and guarding against that
+     * would put a lock on the constrained variant's hot path — where it would
+     * show up in the Pillar A measurements.
+     *
+     * <p>A no-op once {@code HEARTBEAT_STOP} has fired, and it throws
+     * {@link DeviceCrashedException} at a configured CRASH point: a dead
+     * device must not go on asserting that it is alive.
+     */
+    void publishHeartbeat(long nowMillis) throws SinkException;
+
     /** Readings successfully published so far. */
     long readingsPublished();
+
+    /** Heartbeats successfully published so far. */
+    long heartbeatsPublished();
 }

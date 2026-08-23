@@ -34,6 +34,7 @@ import java.util.Locale;
 public final class NaiveEdgeDevice implements EdgeDevice {
 
     private static final String PAYLOAD_FORMAT = buildPayloadFormat();
+    private static final String HEARTBEAT_FORMAT = "{\"deviceId\":\"%s\",\"ts\":%d}";
 
     private final String deviceId;
     private final SensorModel sensor;
@@ -41,6 +42,7 @@ public final class NaiveEdgeDevice implements EdgeDevice {
     private final FailureInjector failures;
 
     private long readingsPublished;
+    private long heartbeatsPublished;
 
     public NaiveEdgeDevice(
             String deviceId, SensorModel sensor, TelemetrySink sink, FailureInjector failures) {
@@ -116,7 +118,27 @@ public final class NaiveEdgeDevice implements EdgeDevice {
     }
 
     @Override
+    public void publishHeartbeat(long nowMillis) throws SinkException {
+        if (failures.shouldCrash(readingsPublished)) {
+            throw new DeviceCrashedException(deviceId, readingsPublished);
+        }
+        if (!failures.shouldSendHeartbeat(readingsPublished)) {
+            return;
+        }
+        String topic = Topics.heartbeat(deviceId);
+        String json = String.format(Locale.ROOT, HEARTBEAT_FORMAT, deviceId, nowMillis);
+        byte[] payload = json.getBytes(StandardCharsets.UTF_8);
+        sink.publish(topic, payload, 0, payload.length);
+        heartbeatsPublished++;
+    }
+
+    @Override
     public long readingsPublished() {
         return readingsPublished;
+    }
+
+    @Override
+    public long heartbeatsPublished() {
+        return heartbeatsPublished;
     }
 }

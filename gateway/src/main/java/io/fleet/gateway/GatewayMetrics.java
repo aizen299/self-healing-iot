@@ -20,6 +20,13 @@ public final class GatewayMetrics {
     private final LongAdder invalidPresence = new LongAdder();
     private final LongAdder handlerErrors = new LongAdder();
     private final LongAdder connectionLosses = new LongAdder();
+    private final LongAdder heartbeatsAccepted = new LongAdder();
+    private final LongAdder heartbeatsMalformed = new LongAdder();
+    private final LongAdder failuresDetected = new LongAdder();
+    private final LongAdder recoveriesObserved = new LongAdder();
+    private final LongAdder recoveryDurationTotalMillis = new LongAdder();
+    private final LongAdder monitorErrors = new LongAdder();
+    private final LongAdder eventPublishFailures = new LongAdder();
 
     public void telemetryAccepted() {
         telemetryAccepted.increment();
@@ -62,6 +69,77 @@ public final class GatewayMetrics {
 
     public void connectionLost() {
         connectionLosses.increment();
+    }
+
+    public void heartbeatAccepted() {
+        heartbeatsAccepted.increment();
+    }
+
+    public void heartbeatMalformed() {
+        heartbeatsMalformed.increment();
+    }
+
+    /** A device was declared failed. Pillar B counts these. */
+    public void failureDetected() {
+        failuresDetected.increment();
+    }
+
+    /**
+     * A failed device was confirmed back in service.
+     *
+     * <p>The duration is detection-to-confirmation, not fault-to-recovery: the
+     * gateway cannot know when the device actually broke. Anything reporting
+     * MTTR from this must say which interval it is.
+     */
+    public void recoveryObserved(long durationMillis) {
+        recoveriesObserved.increment();
+        if (durationMillis > 0L) {
+            recoveryDurationTotalMillis.add(durationMillis);
+        }
+    }
+
+    /** The health sweep threw. Should stay zero; non-zero means detection stalled. */
+    public void monitorError() {
+        monitorErrors.increment();
+    }
+
+    public void eventPublishFailure() {
+        eventPublishFailures.increment();
+    }
+
+    public long heartbeatsAcceptedCount() {
+        return heartbeatsAccepted.sum();
+    }
+
+    public long heartbeatsMalformedCount() {
+        return heartbeatsMalformed.sum();
+    }
+
+    public long failuresDetectedCount() {
+        return failuresDetected.sum();
+    }
+
+    public long recoveriesObservedCount() {
+        return recoveriesObserved.sum();
+    }
+
+    public long monitorErrorCount() {
+        return monitorErrors.sum();
+    }
+
+    public long eventPublishFailureCount() {
+        return eventPublishFailures.sum();
+    }
+
+    /**
+     * Mean observed recovery time, or -1 when nothing has recovered yet.
+     *
+     * <p>An operational figure for the health endpoint. It is not a result:
+     * only a run recorded under experiments/ counts as one.
+     */
+    public long meanRecoveryMillis() {
+        long count = recoveriesObserved.sum();
+        return count == 0L ? -1L : recoveryDurationTotalMillis.sum() / count;
     }
 
     public long acceptedCount() {

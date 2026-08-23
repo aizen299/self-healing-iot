@@ -31,7 +31,7 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phases 1–3 complete — devices publishing over MQTT into a gateway.**
+**Phases 1–4 complete — a fleet whose failures are detected automatically.**
 `common/`, `edge-device/`, and `gateway/` are implemented and tested; the
 other modules are still README-only scaffolding stating their target
 phase.
@@ -73,10 +73,20 @@ MQTT integration tests skip themselves when no broker is listening, so
 verified with a broker running. The wire contract is
 `docs/api/mqtt-topics.md`.
 
-The gateway ingests, validates, and serves fleet state on an HTTP API; it
-does not yet detect failures. Note `devicesKnown` counts retained-presence
-ghosts from earlier runs, so Phase 4 must reconcile against
-`devicesReporting` — see `gateway/README.md`.
+The gateway ingests, validates, serves fleet state on an HTTP API, and
+detects failures. Two detection paths, deliberately: the broker's Last Will
+for a device that dies or disconnects, and a heartbeat timeout for one that
+stays connected but wedges — telemetry is **not** treated as proof of life,
+or that second case would be undetectable (ADR-006).
+
+A device never heard from stays `UNKNOWN` and is never declared failed,
+which is what keeps retained-presence ghosts out of the recovery path.
+`devicesKnown` counts those ghosts; use `devicesReporting` for the real
+fleet.
+
+Heartbeats ride the telemetry tick, so `GATEWAY_HEARTBEAT_INTERVAL_MS` must
+match `FLEET_PUBLISH_INTERVAL_MS`. Nothing enforces that across the two
+processes; a mismatch shows up as false failures or slow detection.
 
 ## Development phases — strict build order
 

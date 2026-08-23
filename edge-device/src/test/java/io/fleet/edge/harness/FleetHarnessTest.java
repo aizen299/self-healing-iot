@@ -30,8 +30,11 @@ class FleetHarnessTest {
             assertEquals(5, result.deviceCount());
             assertTrue(result.readingsPublished() >= 5L,
                     "expected at least one reading per device, got " + result.readingsPublished());
-            assertEquals(result.readingsPublished(), sinks.payloadCount(),
-                    "sink must receive exactly what the devices report publishing");
+            assertEquals(result.readingsPublished() + result.heartbeatsPublished(),
+                    sinks.payloadCount(),
+                    "sink must receive exactly the readings plus heartbeats the devices report");
+            assertTrue(result.heartbeatsPublished() >= 5L,
+                    "each device asserts liveness on every tick");
             assertEquals(0L, result.sinkErrors());
             assertEquals(0L, result.unexpectedErrors());
         }
@@ -54,7 +57,9 @@ class FleetHarnessTest {
             assertEquals(java.util.List.of("device-001"), result.crashedDevices());
             assertEquals(3L, result.readingsPublished(),
                     "a crash after 3 readings must publish exactly 3");
-            assertEquals(3L, sinks.payloadCount());
+            assertEquals(3L, result.heartbeatsPublished(),
+                    "a crashed device must stop asserting liveness, not send one more");
+            assertEquals(6L, sinks.payloadCount(), "3 readings + 3 heartbeats");
             assertEquals(0L, result.unexpectedErrors(),
                     "a simulated crash is expected, not an unexpected error");
         }

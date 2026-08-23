@@ -1,0 +1,111 @@
+package io.fleet.gateway;
+
+import io.fleet.common.DeviceHealth;
+
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Declares devices failed when they stop proving they are alive.
+ *
+ * <p>The second of two detection paths, and the one that catches what the
+ * first cannot. Phase 2's Last Will fires when a connection drops; a device
+ * that stays connected but wedges — heartbeat path starved, loop blocked —
+ * never produces one. Only a timeout notices that.
+ *
+ * <p>Sweeps on a timer rather than reacting to arrivals, because the event
+ * being detected is the <em>absence</em> of a message. Nothing arrives to
+ * trigger the check.
+ */
+public final class HealthMonitor implements AutoCloseable {
+
+    private final DeviceRegistry registry;
+    private final HealthPolicy policy;
+    private final GatewayMetrics metrics;
+    private final EventPublisher events;
+    private final long sweepIntervalMillis;
+    private final ScheduledExecutorService scheduler;
+
+    public HealthMonitor(
+            DeviceRegistry registry,
+            HealthPolicy policy,
+            GatewayMetrics metrics,
+            EventPublisher events,
+            long sweepIntervalMillis) {
+
+        this.registry = registry;
+        this.policy = policy;
+        this.metrics = metrics;
+        this.events = events;
+        this.sweepIntervalMillis = sweepIntervalMillis;
+        this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "gateway-health-monitor");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    public void start() {
+        scheduler.scheduleAtFixedRate(
+                this::sweepQuietly, sweepIntervalMillis, sweepIntervalMillis,
+                TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Runs one sweep, absorbing anything it throws.
+     *
+     * <p>A task that throws out of {@code scheduleAtFixedRate} is cancelled
+     * silently by the executor. Detection would simply stop, and the gateway
+     * would go on reporting every device healthy — the most dangerous possible
+     * failure for this component, since silence is indistinguishable from a
+     * fleet in good order.
+     */
+    private void sweepQuietly() {
+        try {
+            sweep(System.currentTimeMillis());
+        } catch (RuntimeException e) {
+            metrics.monitorError();
+            System.err.println("health sweep failed: " + e);
+        }
+    }
+
+    /**
+     * Evaluates every device and announces what changed.
+     *
+     * <p>Takes the time as an argument so a test can drive the state machine
+     * across thresholds without waiting for them.
+     *
+     * @return the transitions announced
+     */
+    public List<HealthTransition> sweep(long nowMillis) {
+        List<HealthTransition> transitions = registry.evaluateSilence(policy, nowMillis);
+        for (HealthTransition transition : transitions) {
+            announce(transition);
+        }
+        return transitions;
+    }
+
+    /** Applies a transition caused by an arriving heartbeat. */
+    public void announce(HealthTransition transition) {
+        if (transition.isFailure()) {
+            metrics.failureDetected();
+            System.err.printf("device %s declared OFFLINE after %d missed heartbeats%n",
+                    transition.deviceId(), transition.missedHeartbeats());
+        } else if (transition.isRecovery()) {
+            metrics.recoveryObserved(transition.recoveryDurationMillis());
+            System.out.printf("device %s recovered after %d ms%n",
+                    transition.deviceId(), transition.recoveryDurationMillis());
+        } else if (transition.to() == DeviceHealth.RECOVERING) {
+            System.out.printf("device %s is heartbeating again; on probation%n",
+                    transition.deviceId());
+        }
+        events.publish(transition);
+    }
+
+    @Override
+    public void close() {
+        scheduler.shutdownNow();
+    }
+}

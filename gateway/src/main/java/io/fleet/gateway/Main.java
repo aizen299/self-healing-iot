@@ -27,9 +27,17 @@ public final class Main {
         CountDownLatch finished = new CountDownLatch(1);
 
         try (MqttIngestor ingestor = new MqttIngestor(config, registry, metrics);
+             HealthMonitor monitor = new HealthMonitor(registry, config.healthPolicy(), metrics,
+                     ingestor, config.monitorIntervalMillis());
              HealthApi api = new HealthApi(config, registry, metrics)) {
 
+            // Closes the cycle described on MqttIngestor.onTransition: the
+            // monitor announces what the ingestor observes, and publishes
+            // through the ingestor's connection.
+            ingestor.onTransition(monitor::announce);
+
             ingestor.start();
+            monitor.start();
             api.start();
             System.out.printf(Locale.ROOT, "health API on http://%s:%d/health%n",
                     config.httpHost(), api.port());
@@ -66,12 +74,19 @@ public final class Main {
                 broker            : %s
                 client id         : %s
                 subscription QoS  : %d
+                heartbeat expected: every %d ms
+                suspect / offline : %d / %d missed heartbeats
+                recovery confirms : %d heartbeats
                 run duration      : %s
                 jvm               : %s %s
                 %n""",
                 config.brokerUrl(),
                 config.clientId(),
                 config.subscriptionQos(),
+                config.heartbeatIntervalMillis(),
+                config.suspectAfterMisses(),
+                config.offlineAfterMisses(),
+                config.recoveryConfirmations(),
                 config.runDurationSeconds() == 0
                         ? "until interrupted" : config.runDurationSeconds() + " s",
                 System.getProperty("java.vm.name"),
@@ -84,6 +99,11 @@ public final class Main {
                 devices known     : %d
                 devices reporting : %d
                 devices online    : %d
+                health            : %s
+                heartbeats accepted: %d (malformed %d)
+                failures detected : %d
+                recoveries        : %d (mean %d ms)
+                monitor errors    : %d
                 telemetry accepted: %d
                 telemetry rejected: %d (malformed %d, invalid %d)
                 presence events   : %d
@@ -95,6 +115,13 @@ public final class Main {
                 registry.size(),
                 registry.reportingCount(),
                 registry.onlineCount(),
+                registry.healthCounts(),
+                metrics.heartbeatsAcceptedCount(),
+                metrics.heartbeatsMalformedCount(),
+                metrics.failuresDetectedCount(),
+                metrics.recoveriesObservedCount(),
+                metrics.meanRecoveryMillis(),
+                metrics.monitorErrorCount(),
                 metrics.acceptedCount(),
                 metrics.rejectedCount(),
                 metrics.malformedCount(),
