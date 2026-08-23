@@ -112,7 +112,7 @@ class MqttTelemetrySinkTest {
     }
 
     @Test
-    @DisplayName("presence is ONLINE on connect and OFFLINE after a clean close")
+    @DisplayName("presence is ONLINE on connect and SHUTDOWN after a clean close")
     void maintainsRetainedPresence() throws Exception {
         subscriber.subscribe(Topics.status(deviceId));
 
@@ -121,8 +121,11 @@ class MqttTelemetrySinkTest {
             assertEquals(Presence.ONLINE.name(), subscriber.next(), "expected ONLINE on connect");
         }
 
-        assertEquals(Presence.OFFLINE.name(), subscriber.next(),
-                "a clean shutdown must record the device as offline");
+        // SHUTDOWN, not OFFLINE: the will says OFFLINE, and the gateway now
+        // treats that as a failure. Reusing it here would make every orderly
+        // stop look like a device that died.
+        assertEquals(Presence.SHUTDOWN.name(), subscriber.next(),
+                "a clean shutdown must be distinguishable from a fired will");
     }
 
     @Test

@@ -29,9 +29,30 @@ A device whose liveness path has wedged is still connected, so the broker
 has nothing to report. If detection relied only on the will, that device
 would be considered healthy forever.
 
-Both paths are kept. The will gives fast detection of the common case; the
-timeout gives coverage of the case the will structurally cannot see.
-`HEARTBEAT_STOP` exists precisely to exercise the second in isolation.
+Both paths are kept and **both drive health**. The will gives immediate
+detection of the common case — a device declared failed on receipt, with
+`missedHeartbeats: 0` in the event as the signature. The timeout gives
+coverage of the case the will structurally cannot see. `HEARTBEAT_STOP`
+exists precisely to exercise the second in isolation.
+
+### Which required splitting OFFLINE from SHUTDOWN
+
+Phase 2 had a device publish retained `OFFLINE` on clean shutdown *and*
+register `OFFLINE` as its will, which made the two indistinguishable to a
+subscriber. That was harmless while presence was only recorded; the moment
+it drives failure detection it is not, because every orderly fleet stop
+would look like a fleet-wide failure — and from Phase 9, would provision
+replacements for devices deliberately stopped.
+
+So a device now publishes `SHUTDOWN` before a clean DISCONNECT, and only
+the broker publishes `OFFLINE`. The gateway treats them oppositely:
+`OFFLINE` declares a failure, `SHUTDOWN` returns the device to `UNKNOWN`
+and clears its heartbeat history so a later sweep cannot resurrect it as a
+failure either.
+
+The ghost rule survives both: an `OFFLINE` arriving for a device in
+`UNKNOWN` leaves it there. A retained will from an earlier run proves a
+device existed once, not that it just died.
 
 ### Telemetry does not count as proof of life
 
@@ -43,6 +64,16 @@ wedged process is far more common than a cleanly dead one.
 Only a heartbeat proves the device is executing the path that says "I am
 alive". This is verified: the integration test asserts a device is declared
 OFFLINE while its telemetry counter keeps climbing.
+
+### Heartbeats stay QoS 0, deliberately
+
+The gateway subscribes at QoS 1 but devices publish heartbeats at QoS 0,
+and MQTT delivers at the lower of the two — so liveness is best-effort and
+raising the subscription QoS cannot change that. This is not an oversight
+to correct: heartbeats are the highest-volume message in the fleet, and
+`SUSPECTED` exists exactly so that best-effort delivery is safe. Raising
+the publisher to QoS 1 would buy reliability the detector is designed not
+to need, at a cost paid on every tick by every device.
 
 ### Receipt time, never the device's clock
 
@@ -93,7 +124,8 @@ real devices are correctly declared `OFFLINE`.
 
 ## Consequences
 - Positive: the two detection paths together cover both clean death and
-  partial wedging, and the test suite distinguishes them.
+  partial wedging, and the test suite distinguishes them — including a test
+  that a fired will condemns a known device while leaving a ghost alone.
 - Positive: detection is a pure function of (state, misses, confirmations),
   so every transition is tested directly rather than by waiting on real
   time. The full failure-and-recovery cycle is covered in milliseconds.

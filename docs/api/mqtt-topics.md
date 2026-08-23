@@ -65,7 +65,12 @@ signal trustworthy:
 |---|---|---|
 | Device connects | device | `ONLINE` |
 | Device crashes or loses its network | **broker**, via Last Will | `OFFLINE` |
-| Device shuts down cleanly | device, then a real DISCONNECT | `OFFLINE` |
+| Device shuts down cleanly | device, then a real DISCONNECT | `SHUTDOWN` |
+
+`OFFLINE` and `SHUTDOWN` are deliberately different values. The gateway
+treats `OFFLINE` as a **failure** and declares the device down on receipt;
+`SHUTDOWN` retires the device instead. Publishing the same value for both
+would make every orderly fleet stop look like a fleet-wide failure.
 
 A clean shutdown sends a DISCONNECT packet, which suppresses the will.
 An orderly stop therefore does **not** look like a failure. A device that
@@ -92,6 +97,11 @@ interval — the gateway's `GATEWAY_HEARTBEAT_INTERVAL_MS` must match it.
 The timestamp is the device's own clock and is for diagnosis only. Timeout
 detection uses the gateway's receipt time: a wedged device may be wrong
 about the time, and a clock that jumps forward must not buy a reprieve.
+
+QoS 0 is deliberate. Heartbeats are the highest-volume message in the
+fleet, and `SUSPECTED` exists so best-effort delivery is safe. Note the
+gateway's subscription QoS cannot raise this — MQTT delivers at the lower
+of publisher and subscriber.
 
 **Telemetry is not a substitute.** A device whose heartbeat path has wedged
 while its publisher keeps running is the fault heartbeat monitoring exists

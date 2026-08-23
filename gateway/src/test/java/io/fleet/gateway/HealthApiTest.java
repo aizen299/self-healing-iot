@@ -30,6 +30,7 @@ class HealthApiTest {
     private HealthApi api;
     private HttpClient http;
     private String baseUrl;
+    private final HealthPolicy policy = new HealthPolicy(1_000L, 2, 4, 2);
 
     @BeforeEach
     void setUp() throws Exception {
@@ -52,7 +53,7 @@ class HealthApiTest {
     @Test
     void healthReportsFleetCounters() throws Exception {
         registry.recordTelemetry(reading("device-001"), 1_000L);
-        registry.recordPresence("device-001", Presence.ONLINE, 1_100L);
+        registry.recordPresence("device-001", Presence.ONLINE, 1_100L, policy);
         metrics.telemetryAccepted();
         metrics.telemetryMalformed();
 
@@ -99,7 +100,7 @@ class HealthApiTest {
     @Test
     @DisplayName("a device known only from retained presence is flagged as such")
     void presenceOnlyDeviceIsFlagged() throws Exception {
-        registry.recordPresence("ghost-001", Presence.OFFLINE, 500L);
+        registry.recordPresence("ghost-001", Presence.OFFLINE, 500L, policy);
 
         String body = get("/devices/ghost-001").body();
 

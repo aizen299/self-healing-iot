@@ -40,9 +40,24 @@ public final class DeviceRegistry {
         devices.compute(deviceId, (id, existing) -> orUnknown(id, existing).withRejection());
     }
 
-    public void recordPresence(String deviceId, Presence presence, long atMillis) {
-        devices.compute(deviceId, (id, existing) ->
-                orUnknown(id, existing).withPresence(presence, atMillis));
+    /**
+     * Records a connection change and returns the health change it caused.
+     *
+     * <p>The fast detection path: a fired Last Will is proof the device is
+     * gone, so there is no reason to wait out a heartbeat timeout as well.
+     */
+    public Optional<HealthTransition> recordPresence(
+            String deviceId, Presence presence, long atMillis, HealthPolicy policy) {
+
+        DeviceHealth[] before = new DeviceHealth[1];
+        long[] offlineSince = new long[1];
+        DeviceRecord after = devices.compute(deviceId, (id, existing) -> {
+            DeviceRecord record = orUnknown(id, existing);
+            before[0] = record.health();
+            offlineSince[0] = record.offlineSinceMillis();
+            return record.withPresence(presence, atMillis, policy);
+        });
+        return transitionOf(before[0], offlineSince[0], after, atMillis, 0);
     }
 
     /**
@@ -76,7 +91,15 @@ public final class DeviceRegistry {
      */
     public List<HealthTransition> evaluateSilence(HealthPolicy policy, long nowMillis) {
         List<HealthTransition> transitions = new ArrayList<>();
-        for (String deviceId : devices.keySet()) {
+        for (Map.Entry<String, DeviceRecord> entry : devices.entrySet()) {
+            // Skipped before the compute: afterSilence is specified never to
+            // move a device out of UNKNOWN, so evaluating retained-presence
+            // ghosts every sweep is work that can only conclude "no change" —
+            // and they accumulate with broker history, not with fleet size.
+            if (entry.getValue().health() == DeviceHealth.UNKNOWN) {
+                continue;
+            }
+            String deviceId = entry.getKey();
             DeviceHealth[] before = new DeviceHealth[1];
             long[] offlineSince = new long[1];
             int[] missed = new int[1];

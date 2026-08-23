@@ -47,6 +47,7 @@ public final class MqttTelemetrySink implements TelemetrySink, MqttCallback {
     private final String deviceId;
     private final MqttConfig config;
     private final String statusTopic;
+    private final String telemetryTopic;
     private final MqttClient client;
     private final MqttConnectOptions connectOptions;
     private final LongAdder payloads;
@@ -72,6 +73,7 @@ public final class MqttTelemetrySink implements TelemetrySink, MqttCallback {
         this.deviceId = deviceId;
         this.config = config;
         this.statusTopic = io.fleet.common.Topics.status(deviceId);
+        this.telemetryTopic = io.fleet.common.Topics.telemetry(deviceId);
         this.interruptAfterPublishes = interruptAfterPublishes;
         this.interruptDurationMillis = interruptDurationMillis;
         this.payloads = payloads;
@@ -131,7 +133,13 @@ public final class MqttTelemetrySink implements TelemetrySink, MqttCallback {
     public synchronized void publish(String topic, byte[] payload, int offset, int length)
             throws SinkException {
 
-        publishAttempts++;
+        // Only readings advance the counter. Since Phase 4 each tick also
+        // sends a heartbeat through this sink, so counting every publish would
+        // fire the interruption after half as many readings as configured —
+        // silently changing what FLEET_FAIL_AFTER means between phases.
+        if (telemetryTopic.equals(topic)) {
+            publishAttempts++;
+        }
 
         if (shouldTriggerInterruption()) {
             triggerInterruption();
@@ -234,9 +242,11 @@ public final class MqttTelemetrySink implements TelemetrySink, MqttCallback {
     public synchronized void close() throws SinkException {
         try {
             if (client.isConnected()) {
-                // Retained OFFLINE then a real DISCONNECT: the broker records the
-                // device as gone without treating the shutdown as a failure.
-                announce(Presence.OFFLINE);
+                // SHUTDOWN, not OFFLINE: the will says OFFLINE, so reusing it
+                // here would make an orderly stop indistinguishable from a
+                // device that died — and the gateway now declares OFFLINE a
+                // failure on receipt.
+                announce(Presence.SHUTDOWN);
                 client.disconnect(TimeUnit.SECONDS.toMillis(config.operationTimeoutSeconds()));
             }
         } catch (MqttException e) {

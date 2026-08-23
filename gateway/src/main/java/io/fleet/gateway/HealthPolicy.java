@@ -65,7 +65,13 @@ public record HealthPolicy(
             return 0;
         }
         long elapsed = nowMillis - lastHeartbeatAtMillis;
-        return elapsed <= 0L ? 0 : (int) (elapsed / heartbeatIntervalMillis);
+        if (elapsed <= 0L) {
+            return 0;
+        }
+        // Clamped rather than cast: a long silence against a small interval
+        // overflows int and goes negative, which fails every >= below and
+        // would leave the longest-silent device the one never declared failed.
+        return (int) Math.min(Integer.MAX_VALUE, elapsed / heartbeatIntervalMillis);
     }
 
     /** State after a heartbeat arrives. */
@@ -74,8 +80,10 @@ public record HealthPolicy(
             // A device that was merely late was never actually broken, so it
             // returns to service immediately rather than serving probation.
             case UNKNOWN, ONLINE, SUSPECTED -> DeviceHealth.ONLINE;
-            case OFFLINE -> DeviceHealth.RECOVERING;
-            case RECOVERING -> consecutiveHeartbeats >= recoveryConfirmations
+            // The threshold is checked here too, so recoveryConfirmations=1
+            // means one heartbeat restores service. Without it, 1 and 2 both
+            // required two heartbeats and the value silently did nothing.
+            case OFFLINE, RECOVERING -> consecutiveHeartbeats >= recoveryConfirmations
                     ? DeviceHealth.ONLINE : DeviceHealth.RECOVERING;
         };
     }
@@ -98,6 +106,28 @@ public record HealthPolicy(
                 }
                 yield missed >= suspectAfterMisses ? DeviceHealth.SUSPECTED : current;
             }
+        };
+    }
+
+    /**
+     * State after the broker reports a connection change.
+     *
+     * <p>The fast detection path. A fired Last Will is proof the device is
+     * gone, so there is nothing to wait for — but a device the gateway has
+     * never heard from stays {@code UNKNOWN}, which is what keeps a retained
+     * OFFLINE from an earlier run (ADR-004) out of the failure path.
+     *
+     * <p>{@code SHUTDOWN} returns the device to {@code UNKNOWN}: it left on
+     * purpose, so it is no longer a liveness candidate and must not be
+     * declared failed by a later sweep.
+     */
+    public DeviceHealth afterPresence(DeviceHealth current, io.fleet.common.Presence presence) {
+        return switch (presence) {
+            case OFFLINE -> current == DeviceHealth.UNKNOWN ? DeviceHealth.UNKNOWN
+                    : DeviceHealth.OFFLINE;
+            case SHUTDOWN -> DeviceHealth.UNKNOWN;
+            // Connecting is not proof of liveness; only a heartbeat is.
+            case ONLINE -> current;
         };
     }
 

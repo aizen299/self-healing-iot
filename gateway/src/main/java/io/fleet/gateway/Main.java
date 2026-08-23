@@ -20,14 +20,17 @@ public final class Main {
         GatewayConfig config = GatewayConfig.fromEnv();
         DeviceRegistry registry = new DeviceRegistry();
         GatewayMetrics metrics = new GatewayMetrics();
+        // One policy object, so the detector's rules have a single source.
+        HealthPolicy policy = config.healthPolicy();
 
         printHeader(config);
 
         CountDownLatch stopped = new CountDownLatch(1);
         CountDownLatch finished = new CountDownLatch(1);
 
-        try (MqttIngestor ingestor = new MqttIngestor(config, registry, metrics);
-             HealthMonitor monitor = new HealthMonitor(registry, config.healthPolicy(), metrics,
+        try (MqttIngestor ingestor = new MqttIngestor(config, registry, metrics, policy,
+                     java.time.Clock.systemUTC());
+             HealthMonitor monitor = new HealthMonitor(registry, policy, metrics,
                      ingestor, config.monitorIntervalMillis());
              HealthApi api = new HealthApi(config, registry, metrics)) {
 

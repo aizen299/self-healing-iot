@@ -77,9 +77,14 @@ public final class HealthMonitor implements AutoCloseable {
      * <p>Takes the time as an argument so a test can drive the state machine
      * across thresholds without waiting for them.
      *
+     * <p>Synchronised so a test-driven sweep cannot run alongside the timer's:
+     * two sweeps observing the same threshold crossing would each announce it,
+     * publishing duplicate failure events and double-counting a single failure
+     * in the figures Pillar B is built from.
+     *
      * @return the transitions announced
      */
-    public List<HealthTransition> sweep(long nowMillis) {
+    public synchronized List<HealthTransition> sweep(long nowMillis) {
         List<HealthTransition> transitions = registry.evaluateSilence(policy, nowMillis);
         for (HealthTransition transition : transitions) {
             announce(transition);
