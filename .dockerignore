@@ -1,0 +1,18 @@
+# Everything the build does not need. Keeping the context small matters:
+# it is uploaded to the daemon on every build.
+target/
+*/target/
+tests/*/target/
+data/
+*.mv.db
+*.trace.db
+.git/
+.github/
+docs/
+experiments/
+infrastructure/kubernetes/
+infrastructure/helm/
+infrastructure/monitoring/
+.idea/
+*.iml
+.DS_Store

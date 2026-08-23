@@ -1,9 +1,65 @@
 # infrastructure/docker
 
-Dockerfiles per module and a root-level `docker-compose.yml` (see
-repository root) for running the full local stack: MQTT broker, gateway,
-Kafka, time-series database, Prometheus, Grafana.
+Dockerfiles per module and the root `docker-compose.yml` for running the
+local stack: MQTT broker, gateway, and a fleet of simulated devices.
 
-**Status:** not yet implemented (target: Phase 7). Until then the local
-MQTT broker runs natively via Homebrew Mosquitto — Docker is deliberately
-deferred so early phases stay light on an 8 GB machine.
+**Status:** Phase 7 complete for the broker, gateway, and fleet. Kafka, a
+time-series database, Prometheus, and Grafana join the stack as their
+phases land.
+
+Taken **before** Phase 6 — see
+[ADR-008](../../docs/decisions/ADR-008-containerisation-before-kafka.md).
+Both Kafka and a real TSDB need a server, and the phase that supplies
+servers came after both; solving that once with containers beats installing
+four services on an 8 GB laptop.
+
+## Running
+
+```bash
+docker compose up --build
+```
+
+```bash
+curl -s http://127.0.0.1:18080/health
+curl -s http://127.0.0.1:18080/stats
+```
+
+Published on **18080**, not 8080. Port 8080 is the most contended port on a
+developer machine — it was already taken here, and Docker's `0.0.0.0` bind
+lost to that process's `127.0.0.1` bind, so the stack looked healthy while
+the host reached an unrelated server. The container still listens on 8080.
+
+Bring up only what you need; Docker Desktop's VM already claims about half
+of an 8 GB host:
+
+```bash
+docker compose up broker gateway
+```
+
+## Why the images look like this
+
+| Choice | Reason |
+|---|---|
+| `eclipse-temurin:21-jre` runtime | The same HotSpot 21 the host is pinned to by ADR-002, so a measurement in a container is comparable with one outside it |
+| `maven:3.9-eclipse-temurin-21` build | The enforcer's JVM rules, GraalVM rejection included, pass inside the image as they do on the host |
+| Dependencies beside the jar | A code change rebuilds one small layer rather than a fat jar, and the image records what the module actually depends on |
+| `mem_limit` on every service | Java 21 sizes its heap from the cgroup; verified at 128 MB inside a 512 MB container rather than a share of 8 GB. An unbounded container would push this host into swap and corrupt Phase 8's memory numbers |
+| Non-root user | Nothing here needs root, and the gateway is reachable from the network |
+| One container for the whole fleet | ADR-003 scopes the simulation to a shared-JVM harness because 50 JVMs do not fit in this host's memory. Per-device containers arrive with Kubernetes, at a smaller device count, for the recovery demo |
+
+## Measured footprint
+
+The whole stack in about **204 MB** against limits totalling 896 MB:
+
+| Service | Used | Limit |
+|---|---|---|
+| gateway | 106 MB | 512 MB |
+| fleet (10 devices) | 95 MB | 256 MB |
+| broker | 3 MB | 128 MB |
+
+Images are roughly 480 MB each, dominated by the JRE base. `jlink` or an
+Alpine base would cut that considerably and is worth doing before anything
+is pushed to a registry.
+
+These figures are a demonstration, not a result — only runs recorded under
+`experiments/results/` count as those.

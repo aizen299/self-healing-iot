@@ -31,7 +31,10 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phases 1–5 complete — a fleet whose failures are detected and recorded.**
+**Phases 1–5 and 7 complete — a containerised fleet whose failures are
+detected and recorded.** Phase 7 was taken before Phase 6 (ADR-008): Kafka
+and a real TSDB both need a server, and containers supply them. The phase
+numbers still identify the work, but no longer its order.
 `common/`, `edge-device/`, and `gateway/` are implemented and tested; the
 other modules are still README-only scaffolding stating their target
 phase.
@@ -46,6 +49,16 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 mvn clean test                                  # all modules
 mvn -pl edge-device -am test                    # one module + its deps
 ```
+
+The full stack runs in containers, published on **18080** because 8080 is
+already taken on this machine:
+
+```bash
+docker compose up --build
+```
+
+Bring up one service at a time where you can — Docker Desktop's VM already
+claims about half of the 8 GB host, and Phase 8 measures memory on it.
 
 Run the simulator (see `edge-device/README.md` for all variables):
 
