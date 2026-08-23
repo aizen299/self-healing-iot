@@ -36,12 +36,18 @@ of an 8 GB host:
 docker compose up broker gateway
 ```
 
+Verify everything builds and works, without leaving a stack running:
+
+```bash
+./infrastructure/docker/smoke-test.sh
+```
+
 ## Why the images look like this
 
 | Choice | Reason |
 |---|---|
-| `eclipse-temurin:21-jre` runtime | The same HotSpot 21 the host is pinned to by ADR-002, so a measurement in a container is comparable with one outside it |
-| `maven:3.9-eclipse-temurin-21` build | The enforcer's JVM rules, GraalVM rejection included, pass inside the image as they do on the host |
+| Base images pinned by **digest** | A floating tag moves with every release, so two Phase 8 runs weeks apart would use different JVMs while both claimed to be pinned. Note the container's JVM is a *different build* from the host's pinned one — see the ADR-008 amendment; a Pillar A comparison must be entirely inside containers or entirely outside |
+| Temurin build stage | The enforcer's JVM rules, GraalVM rejection included, pass inside the image as they do on the host |
 | Dependencies beside the jar | A code change rebuilds one small layer rather than a fat jar, and the image records what the module actually depends on |
 | `mem_limit` on every service | Java 21 sizes its heap from the cgroup; verified at 128 MB inside a 512 MB container rather than a share of 8 GB. An unbounded container would push this host into swap and corrupt Phase 8's memory numbers |
 | Non-root user | Nothing here needs root, and the gateway is reachable from the network |
