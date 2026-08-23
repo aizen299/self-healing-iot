@@ -1,12 +1,12 @@
-package io.fleet.edge;
+package io.fleet.common;
 
 /**
  * Signals invalid configuration.
  *
  * <p>Unchecked because configuration is validated once at startup and a bad
  * value is an operator error with no recovery path — the correct response is
- * to fail before any telemetry is produced, not to degrade quietly. An
- * experiment started with a misread config would otherwise record results
+ * to fail before any telemetry is produced or consumed, not to degrade
+ * quietly. A run started with a misread config would otherwise record results
  * against parameters nobody intended.
  */
 public final class ConfigurationException extends RuntimeException {

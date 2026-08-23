@@ -1,6 +1,6 @@
 package io.fleet.edge.mqtt;
 
-import io.fleet.edge.ConfigurationException;
+import io.fleet.common.ConfigurationException;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;

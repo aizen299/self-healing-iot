@@ -1,5 +1,6 @@
 package io.fleet.edge;
 
+import io.fleet.common.ConfigurationException;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;

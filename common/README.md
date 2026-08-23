@@ -5,7 +5,7 @@ definitions, MQTT/Kafka topic name constants, and small utilities. Kept
 deliberately thin — this is not a dumping ground for unrelated shared
 logic. No dependencies.
 
-**Status:** Phases 1–2 complete for the telemetry path. Kafka topic
+**Status:** Phases 1–3 complete for the telemetry path. Kafka topic
 constants arrive in Phase 6; gateway-facing event DTOs in Phases 3–4.
 
 ## Contents
@@ -23,6 +23,7 @@ constants arrive in Phase 6; gateway-facing event DTOs in Phases 3–4.
 | `TelemetryValidator` | Range and well-formedness checks, used by the gateway from Phase 3. |
 | `Topics` | MQTT topic names following `fleet/{deviceId}/...`. |
 | `FleetException` and subtypes | Checked exception hierarchy. |
+| `ConfigurationException`, `Env` | Shared, fail-loud environment parsing so every module reports a bad value the same way. |
 
 ## Two deliberate choices
 

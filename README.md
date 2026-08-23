@@ -76,9 +76,9 @@ and current implementation status.
 
 ## Status
 
-**Phases 1–2 complete — edge simulator publishing over MQTT.** `common/`
-and `edge-device/` are implemented, tested, and runnable; 58 tests pass.
-The remaining modules are still scaffolding.
+**Phases 1–3 complete — devices publishing over MQTT into a gateway.**
+`common/`, `edge-device/`, and `gateway/` are implemented, tested, and
+runnable; 90 tests pass. The remaining modules are still scaffolding.
 
 The simulator runs a fleet of 50 devices in two variants — a
 resource-disciplined one and a conventional baseline — producing an
@@ -91,6 +91,10 @@ fleet. That per-device presence signal on `fleet/{id}/status` is what
 Phase 4's failure detection will consume; the wire contract is in
 [`docs/api/mqtt-topics.md`](docs/api/mqtt-topics.md).
 
+The gateway subscribes to the whole fleet, validates every reading, tracks
+per-device state, and serves it over HTTP. It does not yet detect failures
+— heartbeat timeouts and the device state machine are Phase 4.
+
 ## Development phases
 
 Build order is strict — never start a phase before the previous one has a
@@ -99,7 +103,7 @@ working, tested demonstration. This numbering is canonical and matches
 
 - [x] Phase 1 — Java edge simulator
 - [x] Phase 2 — MQTT communication
-- [ ] Phase 3 — Java gateway
+- [x] Phase 3 — Java gateway
 - [ ] Phase 4 — Heartbeat / failure detection
 - [ ] Phase 5 — Persistent telemetry
 - [ ] Phase 6 — Kafka streaming

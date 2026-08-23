@@ -18,6 +18,8 @@
   <modules>
     <module>common</module>
     <module>edge-device</module>
+    <module>gateway</module>
+    <module>tests/integration</module>
   </modules>
 
   <properties>
@@ -41,6 +43,11 @@
     <!-- Eclipse Paho MQTT 3.1.1 client; see ADR-004. No transitive
          dependencies, which keeps the edge device's footprint honest. -->
     <paho.version>1.2.5</paho.version>
+
+    <!-- Streaming parser only, not databind: one 572 KB jar with no
+         transitive dependencies, and explicit control over how a malformed
+         payload is reported. See ADR-005. -->
+    <jackson.version>2.17.2</jackson.version>
   </properties>
 
   <dependencyManagement>
@@ -61,6 +68,11 @@
         <groupId>org.eclipse.paho</groupId>
         <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
         <version>${paho.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-core</artifactId>
+        <version>${jackson.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>
