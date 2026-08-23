@@ -1,10 +1,9 @@
 package io.fleet.edge.mqtt;
 
+import io.fleet.common.BrokerUrl;
 import io.fleet.common.ConfigurationException;
 import io.fleet.common.Env;
 
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.Map;
 
 /**
@@ -33,32 +32,7 @@ public record MqttConfig(
         boolean publishRetainedStatus) {
 
     public MqttConfig {
-        if (brokerUrl == null || brokerUrl.isBlank()) {
-            throw new ConfigurationException("MQTT_BROKER_URL must not be blank");
-        }
-        if (!brokerUrl.startsWith("tcp://") && !brokerUrl.startsWith("ssl://")) {
-            throw new ConfigurationException(
-                    "MQTT_BROKER_URL must start with tcp:// or ssl://, got '" + brokerUrl + "'");
-        }
-        // Checked here rather than left to Paho: a missing port surfaces from
-        // the client as a generic connect failure, which points the operator
-        // at the broker instead of at the variable they mistyped.
-        URI parsed;
-        try {
-            parsed = new URI(brokerUrl);
-        } catch (URISyntaxException e) {
-            throw new ConfigurationException(
-                    "MQTT_BROKER_URL is not a valid URI: '" + brokerUrl + "'", e);
-        }
-        if (parsed.getHost() == null || parsed.getHost().isBlank()) {
-            throw new ConfigurationException(
-                    "MQTT_BROKER_URL has no host: '" + brokerUrl + "'");
-        }
-        if (parsed.getPort() < 1) {
-            throw new ConfigurationException(
-                    "MQTT_BROKER_URL must include a port, e.g. tcp://host:1883, got '"
-                            + brokerUrl + "'");
-        }
+        BrokerUrl.validate("MQTT_BROKER_URL", brokerUrl);
         if (clientIdPrefix == null || clientIdPrefix.isBlank()) {
             throw new ConfigurationException("MQTT_CLIENT_ID_PREFIX must not be blank");
         }

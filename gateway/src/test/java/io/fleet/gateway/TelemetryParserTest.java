@@ -65,6 +65,37 @@ class TelemetryParserTest {
     }
 
     @Test
+    @DisplayName("a nested object is not harvested as if it were top level")
+    void rejectsAStructuredValueForAKnownField() {
+        // Without skipping the structure the cursor descends into it and its
+        // keys are read as top-level fields, so this payload would parse into
+        // a complete but entirely fabricated reading.
+        String nested = "{\"deviceId\":{\"deviceId\":\"IMPOSTOR\",\"ts\":99,\"temp\":1.0,"
+                + "\"vib\":1.0,\"batt\":1.0,\"lat\":1.0,\"lon\":1.0,\"status\":\"OK\"}}";
+
+        MalformedPayloadException error =
+                assertThrows(MalformedPayloadException.class, () -> parse(nested));
+        assertTrue(error.getMessage().contains("scalar"), error.getMessage());
+    }
+
+    @Test
+    void rejectsAnArrayValueForAKnownField() {
+        String withArray = VALID.replace("\"temp\":19.90", "\"temp\":[1,2,3]");
+
+        assertThrows(MalformedPayloadException.class, () -> parse(withArray));
+    }
+
+    @Test
+    @DisplayName("a duplicated field is rejected rather than last-one-wins")
+    void rejectsDuplicateFields() {
+        String duplicated = VALID.replace("\"temp\":19.90,", "\"temp\":19.90,\"temp\":999.0,");
+
+        MalformedPayloadException error =
+                assertThrows(MalformedPayloadException.class, () -> parse(duplicated));
+        assertTrue(error.getMessage().contains("duplicate"), error.getMessage());
+    }
+
+    @Test
     void rejectsNonJson() {
         assertThrows(MalformedPayloadException.class, () -> parse("not json at all"));
         assertThrows(MalformedPayloadException.class, () -> parse(""));

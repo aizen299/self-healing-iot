@@ -13,6 +13,9 @@ import java.util.concurrent.TimeUnit;
  */
 public final class Main {
 
+    /** How long the shutdown hook waits for an orderly exit before giving up. */
+    private static final long SHUTDOWN_GRACE_SECONDS = 10L;
+
     public static void main(String[] args) throws Exception {
         GatewayConfig config = GatewayConfig.fromEnv();
         DeviceRegistry registry = new DeviceRegistry();
@@ -21,6 +24,7 @@ public final class Main {
         printHeader(config);
 
         CountDownLatch stopped = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
 
         try (MqttIngestor ingestor = new MqttIngestor(config, registry, metrics);
              HealthApi api = new HealthApi(config, registry, metrics)) {
@@ -30,8 +34,19 @@ public final class Main {
             System.out.printf(Locale.ROOT, "health API on http://%s:%d/health%n",
                     config.httpHost(), api.port());
 
-            Runtime.getRuntime().addShutdownHook(
-                    new Thread(stopped::countDown, "gateway-shutdown"));
+            // The hook waits for the main thread to finish shutting down.
+            // Counting the latch down and returning would let the JVM continue
+            // its exit sequence and kill main part-way through disconnecting or
+            // printing — and since this process runs until interrupted, SIGINT
+            // is its normal exit path rather than an edge case.
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                stopped.countDown();
+                try {
+                    finished.await(SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }, "gateway-shutdown"));
 
             if (config.runDurationSeconds() > 0) {
                 stopped.await(config.runDurationSeconds(), TimeUnit.SECONDS);
@@ -40,6 +55,8 @@ public final class Main {
             }
 
             printSummary(registry, metrics);
+        } finally {
+            finished.countDown();
         }
     }
 
@@ -71,6 +88,8 @@ public final class Main {
                 telemetry rejected: %d (malformed %d, invalid %d)
                 presence events   : %d
                 unroutable msgs   : %d
+                invalid presence  : %d
+                handler errors    : %d
                 connection losses : %d
                 %n""",
                 registry.size(),
@@ -82,6 +101,8 @@ public final class Main {
                 metrics.invalidCount(),
                 metrics.presenceCount(),
                 metrics.unroutableCount(),
+                metrics.invalidPresenceCount(),
+                metrics.handlerErrorCount(),
                 metrics.connectionLossCount());
 
         System.out.println("These figures are a demonstration. Only runs recorded under "

@@ -29,10 +29,21 @@ Nothing thrown in a message callback escapes. Paho would log it and carry
 on, and the gateway would look healthy while silently dropping every
 message of that shape.
 
-**Malformed and invalid are counted separately.** A payload that will not
-parse suggests a producer speaking the wrong format; a reading with an
-impossible value suggests a sensor or simulation problem. One number for
-both would hide which is happening.
+**Failures are counted apart, not lumped together.** Each kind points at a
+different fault, and a single counter would hide which is happening:
+
+| Counter | What it suggests |
+|---|---|
+| `telemetryMalformed` | A producer speaking the wrong format |
+| `telemetryInvalid` | A sensor or simulation producing impossible values |
+| `unroutableMessages` | Another publisher using the fleet topic space |
+| `invalidPresence` | One of our devices publishing an unknown presence value |
+| `handlerErrors` | A bug in the gateway — should always be zero |
+
+`handlerErrors` exists because Paho catches anything escaping a message
+callback, logs it, and carries on. Without an explicit boundary and counter
+the gateway would report itself healthy while silently dropping every
+message of some shape.
 
 ## HTTP API
 
@@ -76,6 +87,7 @@ every stale retained entry becomes a phantom failure to recover.
 | `GATEWAY_RUN_DURATION_SECONDS` | `0` | `0` runs until interrupted |
 | `MQTT_KEEPALIVE_SECONDS` | `60` | |
 | `MQTT_CONNECTION_TIMEOUT_SECONDS` | `10` | |
+| `MQTT_OPERATION_TIMEOUT_SECONDS` | `10` | Ceiling on any blocking client call |
 | `MQTT_CLEAN_SESSION` | `true` | |
 
 ## Running

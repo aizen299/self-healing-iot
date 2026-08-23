@@ -116,6 +116,19 @@ class HealthApiTest {
     }
 
     @Test
+    @DisplayName("a path merely starting with /devices does not resolve to a device")
+    void prefixPathIsNotTreatedAsADeviceLookup() throws Exception {
+        registry.recordTelemetry(reading("oo"), 1_000L);
+
+        // HttpServer matches contexts by prefix, so /devicesfoo reaches the
+        // same handler; stripping a fixed character would look up "oo".
+        HttpResponse<String> response = get("/devicesfoo");
+
+        assertEquals(404, response.statusCode(), response.body());
+        assertTrue(response.body().contains("not found"), response.body());
+    }
+
+    @Test
     void nonGetIsRejected() throws Exception {
         HttpResponse<String> response = http.send(
                 HttpRequest.newBuilder(URI.create(baseUrl + "/health"))

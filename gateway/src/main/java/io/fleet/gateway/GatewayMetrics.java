@@ -17,6 +17,8 @@ public final class GatewayMetrics {
     private final LongAdder telemetryInvalid = new LongAdder();
     private final LongAdder presenceEvents = new LongAdder();
     private final LongAdder unroutableMessages = new LongAdder();
+    private final LongAdder invalidPresence = new LongAdder();
+    private final LongAdder handlerErrors = new LongAdder();
     private final LongAdder connectionLosses = new LongAdder();
 
     public void telemetryAccepted() {
@@ -38,6 +40,24 @@ public final class GatewayMetrics {
     /** A message on a topic the gateway subscribed to but cannot interpret. */
     public void unroutableMessage() {
         unroutableMessages.increment();
+    }
+
+    /**
+     * A status message whose payload is not a presence value. Counted apart
+     * from an unroutable topic: that means another publisher is using the
+     * fleet topic space, while this means one of our own devices is speaking a
+     * protocol the gateway does not recognise.
+     */
+    public void invalidPresence() {
+        invalidPresence.increment();
+    }
+
+    /**
+     * An error escaping a message handler. Should stay zero; a non-zero value
+     * means messages of some shape are being dropped.
+     */
+    public void handlerError() {
+        handlerErrors.increment();
     }
 
     public void connectionLost() {
@@ -62,6 +82,14 @@ public final class GatewayMetrics {
 
     public long unroutableCount() {
         return unroutableMessages.sum();
+    }
+
+    public long invalidPresenceCount() {
+        return invalidPresence.sum();
+    }
+
+    public long handlerErrorCount() {
+        return handlerErrors.sum();
     }
 
     public long connectionLossCount() {
