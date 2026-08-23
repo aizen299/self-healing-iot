@@ -76,9 +76,15 @@ and current implementation status.
 
 ## Status
 
-**Phase 0 — repository scaffolding.** No application code yet. This
-commit establishes the folder structure, git history, and baseline
-documentation that later phases build on.
+**Phase 1 complete — Java edge simulator.** `common/` and `edge-device/`
+are implemented, tested, and runnable; 40 unit tests pass. The remaining
+modules are still scaffolding.
+
+The simulator runs a fleet of 50 devices in two variants — a
+resource-disciplined one and a conventional baseline — producing an
+identical deterministic workload and byte-identical payloads, which is
+what makes Pillar A a fair comparison. There is no MQTT yet; devices
+publish through a `TelemetrySink` seam that Phase 2 implements against.
 
 ## Development phases
 
@@ -86,7 +92,7 @@ Build order is strict — never start a phase before the previous one has a
 working, tested demonstration. This numbering is canonical and matches
 `CLAUDE.md`:
 
-- [ ] Phase 1 — Java edge simulator
+- [x] Phase 1 — Java edge simulator
 - [ ] Phase 2 — MQTT communication
 - [ ] Phase 3 — Java gateway
 - [ ] Phase 4 — Heartbeat / failure detection
@@ -140,9 +146,25 @@ daemon (Phase 7), `helm` (Phase 13, optional).
 
 ## How to run
 
-Nothing is runnable yet. Run instructions will be added to this README as
-each phase lands, starting with the edge simulator in Phase 1 and a local
-Mosquitto broker in Phase 2.
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+mvn clean test
+```
+
+Run a fleet of 50 constrained devices under a 64 MB heap for 10 seconds:
+
+```bash
+FLEET_VARIANT=constrained FLEET_DEVICE_COUNT=50 FLEET_RUN_DURATION_SECONDS=10 \
+  java -Xmx64m -cp edge-device/target/classes:common/target/classes io.fleet.edge.Main
+```
+
+Swap `FLEET_VARIANT=naive` for the baseline, or inject a deterministic
+failure with `FLEET_FAILURE_MODE=CRASH FLEET_FAIL_AFTER=10`. All
+variables are documented in `edge-device/README.md`.
+
+The run summary is a **demonstration, not a result** — figures count only
+when produced by a run recorded under `experiments/results/` with its
+configuration attached.
 
 ## Documentation
 

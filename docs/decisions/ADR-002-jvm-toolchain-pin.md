@@ -75,10 +75,35 @@ libraries this project depends on for its riskiest phases.
 - Negative: `JAVA_HOME` must be set explicitly, because the `PATH`
   default remains GraalVM via SDKMAN. This is a standing footgun for any
   contributor and for any experiment run from a fresh shell.
-- Mitigation: once the Maven build exists (Phase 1), enforce the pin
-  mechanically with `maven-enforcer-plugin` (`requireJavaVersion`) and
-  `maven.compiler.release=21`, so a build on the wrong JVM fails loudly
+- Mitigation: the Phase 1 build enforces the pin mechanically via
+  `maven-enforcer-plugin`, so a build on the wrong JVM fails loudly
   instead of silently producing incomparable measurements.
+
+## Amendment, 2026-08-23: a version check is not sufficient
+
+Implementing the enforcement in Phase 1 exposed a hole in the obvious
+approach. `requireJavaVersion [21,22)` **passes on GraalVM 21**, because
+GraalVM 21 is genuinely Java 21 — so the rule that was supposed to
+protect Pillar A would have allowed exactly the runtime the ADR exists
+to exclude, while reporting that the pin was enforced.
+
+Checking `java.vm.name` does not help either: Oracle GraalVM 21 reports
+it as `Java HotSpot(TM) 64-Bit Server VM`, identical in spirit to a
+stock HotSpot build.
+
+The reliable discriminators, confirmed against both JDKs on this
+machine:
+
+| Property | GraalVM 21.0.9 | Pinned OpenJDK 21.0.12.1 |
+|---|---|---|
+| `java.vm.version` | `21.0.9+7-LTS-jvmci-23.1-b79` | `21.0.12.1` |
+| `java.vendor.version` | `Oracle GraalVM 21.0.9+7.1` | `Homebrew` |
+| `java.vm.name` | `Java HotSpot(TM) 64-Bit Server VM` | `OpenJDK 64-Bit Server VM` |
+
+The build therefore adds a second enforcer rule rejecting any JVM whose
+`java.vm.version` carries the JVMCI marker or whose `java.vendor.version`
+names GraalVM. Both directions are verified: a GraalVM 21 build fails
+with the remediation message, and the pinned JDK builds and tests clean.
 - Revisit if: the project deliberately adopts GraalVM native-image as a
   *studied variable* — a legitimate extension of the constrained-Java
   thesis, but one that would require its own ADR, its own experiment

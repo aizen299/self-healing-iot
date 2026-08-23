@@ -31,12 +31,31 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phase 0 — repository scaffolding only.** There is no application code, no
-build files, and nothing runnable yet. Every module directory currently
-contains just a `README.md` stating its target phase. Do not assume any
-Maven/Gradle build exists — check before assuming build/test commands, and
-update this file with real commands (`mvn ...` / `./gradlew ...`) once a
-build file is added in Phase 1.
+**Phase 1 complete — Java edge simulator.** `common/` and `edge-device/`
+are implemented and tested; the other modules are still README-only
+scaffolding stating their target phase.
+
+Build is **Maven** (no Gradle). The JVM is pinned to HotSpot OpenJDK 21
+by ADR-002 and enforced by `maven-enforcer-plugin` — the build fails on
+any other version *and* on GraalVM, because Graal's escape analysis can
+erase the allocation differences Pillar A measures.
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+mvn clean test                                  # all modules
+mvn -pl edge-device -am test                    # one module + its deps
+```
+
+Run the simulator (see `edge-device/README.md` for all variables):
+
+```bash
+FLEET_VARIANT=constrained FLEET_DEVICE_COUNT=50 \
+  java -Xmx64m -cp edge-device/target/classes:common/target/classes io.fleet.edge.Main
+```
+
+Fleet scope is 50 devices and the simulation model is hybrid — see
+ADR-003. There is no MQTT yet; devices publish through a `TelemetrySink`
+seam that Phase 2 implements against.
 
 ## Development phases — strict build order
 
