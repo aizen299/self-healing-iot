@@ -1,6 +1,7 @@
 package io.fleet.edge.mqtt;
 
-import io.fleet.edge.ConfigurationException;
+import io.fleet.common.ConfigurationException;
+import io.fleet.common.Env;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -84,49 +85,19 @@ public record MqttConfig(
 
     public static MqttConfig from(Map<String, String> env) {
         return new MqttConfig(
-                value(env, "MQTT_BROKER_URL", "tcp://127.0.0.1:1883"),
-                value(env, "MQTT_CLIENT_ID_PREFIX", "fleet"),
-                parseInt(env, "MQTT_QOS", 0),
-                parseInt(env, "MQTT_KEEPALIVE_SECONDS", 60),
-                parseInt(env, "MQTT_CONNECTION_TIMEOUT_SECONDS", 10),
-                parseInt(env, "MQTT_OPERATION_TIMEOUT_SECONDS", 10),
-                parseBoolean(env, "MQTT_CLEAN_SESSION", true),
-                parseBoolean(env, "MQTT_AUTOMATIC_RECONNECT", true),
-                parseBoolean(env, "MQTT_RETAINED_STATUS", true));
+                Env.string(env, "MQTT_BROKER_URL", "tcp://127.0.0.1:1883"),
+                Env.string(env, "MQTT_CLIENT_ID_PREFIX", "fleet"),
+                Env.intValue(env, "MQTT_QOS", 0),
+                Env.intValue(env, "MQTT_KEEPALIVE_SECONDS", 60),
+                Env.intValue(env, "MQTT_CONNECTION_TIMEOUT_SECONDS", 10),
+                Env.intValue(env, "MQTT_OPERATION_TIMEOUT_SECONDS", 10),
+                Env.booleanValue(env, "MQTT_CLEAN_SESSION", true),
+                Env.booleanValue(env, "MQTT_AUTOMATIC_RECONNECT", true),
+                Env.booleanValue(env, "MQTT_RETAINED_STATUS", true));
     }
 
     /** Client id for one device; MQTT requires these to be unique per connection. */
     public String clientId(String deviceId) {
         return clientIdPrefix + "-" + deviceId;
-    }
-
-    private static String value(Map<String, String> env, String key, String fallback) {
-        String raw = env.get(key);
-        return (raw == null || raw.isBlank()) ? fallback : raw.trim();
-    }
-
-    private static int parseInt(Map<String, String> env, String key, int fallback) {
-        String raw = value(env, key, null);
-        if (raw == null) {
-            return fallback;
-        }
-        try {
-            return Integer.parseInt(raw);
-        } catch (NumberFormatException e) {
-            throw new ConfigurationException(key + " must be an integer, got '" + raw + "'", e);
-        }
-    }
-
-    private static boolean parseBoolean(Map<String, String> env, String key, boolean fallback) {
-        String raw = value(env, key, null);
-        if (raw == null) {
-            return fallback;
-        }
-        if (raw.equalsIgnoreCase("true") || raw.equalsIgnoreCase("false")) {
-            return Boolean.parseBoolean(raw);
-        }
-        // Boolean.parseBoolean maps anything unrecognised to false, which would
-        // silently disable a feature the operator meant to enable.
-        throw new ConfigurationException(key + " must be true or false, got '" + raw + "'");
     }
 }

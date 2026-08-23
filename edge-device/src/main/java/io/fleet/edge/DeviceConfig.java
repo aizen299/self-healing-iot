@@ -1,5 +1,8 @@
 package io.fleet.edge;
 
+import io.fleet.common.ConfigurationException;
+import io.fleet.common.Env;
+
 import java.util.Locale;
 import java.util.Map;
 
@@ -122,19 +125,19 @@ public record DeviceConfig(
     /** Reads configuration from an arbitrary map, so tests need no real environment. */
     public static DeviceConfig from(Map<String, String> env) {
         return new DeviceConfig(
-                parseEnum("FLEET_VARIANT", env, "CONSTRAINED", Variant::parse),
-                parseEnum("FLEET_SINK", env, "COUNTING", SinkType::parse),
-                parseInt("FLEET_DEVICE_COUNT", env, DEFAULT_DEVICE_COUNT),
-                value("FLEET_DEVICE_ID_PREFIX", env, "device"),
-                parseLong("FLEET_PUBLISH_INTERVAL_MS", env, 1000L),
-                parseLong("FLEET_RUN_DURATION_SECONDS", env, 30L),
-                parseEnum("FLEET_FAILURE_MODE", env, "NONE", FailureMode::parse),
-                parseLong("FLEET_FAIL_AFTER", env, 0L),
-                parseInt("FLEET_FLOOD_MULTIPLIER", env, 10),
-                parseLong("FLEET_INTERRUPT_DURATION_MS", env, 5000L),
-                parseLong("FLEET_SEED", env, 42L),
-                parseDouble("FLEET_BASE_LAT", env, 52.5200d),
-                parseDouble("FLEET_BASE_LON", env, 13.4050d));
+                Env.enumValue(env, "FLEET_VARIANT", "CONSTRAINED", Variant::parse),
+                Env.enumValue(env, "FLEET_SINK", "COUNTING", SinkType::parse),
+                Env.intValue(env, "FLEET_DEVICE_COUNT", DEFAULT_DEVICE_COUNT),
+                Env.string(env, "FLEET_DEVICE_ID_PREFIX", "device"),
+                Env.longValue(env, "FLEET_PUBLISH_INTERVAL_MS", 1000L),
+                Env.longValue(env, "FLEET_RUN_DURATION_SECONDS", 30L),
+                Env.enumValue(env, "FLEET_FAILURE_MODE", "NONE", FailureMode::parse),
+                Env.longValue(env, "FLEET_FAIL_AFTER", 0L),
+                Env.intValue(env, "FLEET_FLOOD_MULTIPLIER", 10),
+                Env.longValue(env, "FLEET_INTERRUPT_DURATION_MS", 5000L),
+                Env.longValue(env, "FLEET_SEED", 42L),
+                Env.doubleValue(env, "FLEET_BASE_LAT", 52.5200d),
+                Env.doubleValue(env, "FLEET_BASE_LON", 13.4050d));
     }
 
     /** Zero-padded device id, e.g. {@code device-007}. */
@@ -145,60 +148,5 @@ public record DeviceConfig(
     /** Per-device seed, so devices differ from each other but a run repeats exactly. */
     public long seedFor(int index) {
         return seed * 31L + index;
-    }
-
-    private static String value(String key, Map<String, String> env, String fallback) {
-        String raw = env.get(key);
-        return (raw == null || raw.isBlank()) ? fallback : raw.trim();
-    }
-
-    /**
-     * Parses as a long and rejects anything outside int range before
-     * narrowing. A bare {@code (int)} cast would wrap a too-large value into a
-     * different, plausible one — {@code 4294967297} becomes {@code 1} — and
-     * the range checks above would then validate the wrapped number, so a run
-     * would proceed under a configuration nobody wrote.
-     */
-    private static int parseInt(String key, Map<String, String> env, int fallback) {
-        long parsed = parseLong(key, env, fallback);
-        if (parsed < Integer.MIN_VALUE || parsed > Integer.MAX_VALUE) {
-            throw new ConfigurationException(
-                    key + " must fit in a 32-bit integer, got " + parsed);
-        }
-        return (int) parsed;
-    }
-
-    private static long parseLong(String key, Map<String, String> env, long fallback) {
-        String raw = value(key, env, null);
-        if (raw == null) {
-            return fallback;
-        }
-        try {
-            return Long.parseLong(raw);
-        } catch (NumberFormatException e) {
-            throw new ConfigurationException(key + " must be an integer, got '" + raw + "'", e);
-        }
-    }
-
-    private static double parseDouble(String key, Map<String, String> env, double fallback) {
-        String raw = value(key, env, null);
-        if (raw == null) {
-            return fallback;
-        }
-        try {
-            return Double.parseDouble(raw);
-        } catch (NumberFormatException e) {
-            throw new ConfigurationException(key + " must be a number, got '" + raw + "'", e);
-        }
-    }
-
-    private static <T> T parseEnum(
-            String key, Map<String, String> env, String fallback, java.util.function.Function<String, T> parser) {
-        String raw = value(key, env, fallback);
-        try {
-            return parser.apply(raw);
-        } catch (IllegalArgumentException e) {
-            throw new ConfigurationException(key + " has unknown value '" + raw + "'", e);
-        }
     }
 }

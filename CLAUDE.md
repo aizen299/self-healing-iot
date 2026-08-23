@@ -31,9 +31,10 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phases 1–2 complete — edge simulator publishing over MQTT.** `common/`
-and `edge-device/` are implemented and tested; the other modules are
-still README-only scaffolding stating their target phase.
+**Phases 1–3 complete — devices publishing over MQTT into a gateway.**
+`common/`, `edge-device/`, and `gateway/` are implemented and tested; the
+other modules are still README-only scaffolding stating their target
+phase.
 
 Build is **Maven** (no Gradle). The JVM is pinned to HotSpot OpenJDK 21
 by ADR-002 and enforced by `maven-enforcer-plugin` — the build fails on
@@ -68,8 +69,14 @@ so sharing one would leave the broker unable to name which device died
 ```
 
 MQTT integration tests skip themselves when no broker is listening, so
-`mvn test` stays green without one — but Phase 2 work should be verified
-with a broker running. The wire contract is `docs/api/mqtt-topics.md`.
+`mvn test` stays green without one — but MQTT and gateway work should be
+verified with a broker running. The wire contract is
+`docs/api/mqtt-topics.md`.
+
+The gateway ingests, validates, and serves fleet state on an HTTP API; it
+does not yet detect failures. Note `devicesKnown` counts retained-presence
+ghosts from earlier runs, so Phase 4 must reconcile against
+`devicesReporting` — see `gateway/README.md`.
 
 ## Development phases — strict build order
 

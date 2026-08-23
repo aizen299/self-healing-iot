@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.fleet</groupId>
+    <artifactId>self-healing-fleet</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>gateway</artifactId>
+  <name>gateway</name>
+  <description>
+    MQTT-facing gateway: ingests and validates device telemetry, tracks
+    per-device state, and serves a health API. Two runtime dependencies —
+    the Paho MQTT client and Jackson's streaming parser — and the JDK's own
+    HTTP server rather than a web framework.
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.fleet</groupId>
+      <artifactId>common</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.paho</groupId>
+      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+    </dependency>
+  </dependencies>
+</project>
