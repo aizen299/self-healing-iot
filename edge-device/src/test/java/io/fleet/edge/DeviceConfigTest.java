@@ -16,6 +16,8 @@ class DeviceConfigTest {
         DeviceConfig config = DeviceConfig.from(Map.of());
 
         assertEquals(Variant.CONSTRAINED, config.variant());
+        assertEquals(SinkType.COUNTING, config.sink(),
+                "the default must need no broker, and must keep transport cost out of Pillar A");
         assertEquals(50, config.deviceCount(), "ADR-003 scopes the fleet to 50 devices");
         assertEquals(FailureMode.NONE, config.failureMode());
         assertEquals(1000L, config.publishIntervalMillis());
@@ -117,6 +119,28 @@ class DeviceConfigTest {
         ConfigurationException error = assertThrows(ConfigurationException.class,
                 () -> DeviceConfig.from(Map.of("FLEET_DEVICE_ID_PREFIX", prefix)));
         assertTrue(error.getMessage().contains("deviceIdPrefix"), error.getMessage());
+    }
+
+    @Test
+    void rejectsNetworkInterruptionWithoutANetwork() {
+        ConfigurationException error = assertThrows(ConfigurationException.class,
+                () -> DeviceConfig.from(Map.of(
+                        "FLEET_FAILURE_MODE", "NETWORK_INTERRUPTION",
+                        "FLEET_FAIL_AFTER", "5")));
+        assertTrue(error.getMessage().contains("FLEET_SINK=MQTT"), error.getMessage());
+    }
+
+    @Test
+    void acceptsNetworkInterruptionWithTheMqttSink() {
+        DeviceConfig config = DeviceConfig.from(Map.of(
+                "FLEET_SINK", "mqtt",
+                "FLEET_FAILURE_MODE", "NETWORK_INTERRUPTION",
+                "FLEET_FAIL_AFTER", "5",
+                "FLEET_INTERRUPT_DURATION_MS", "1500"));
+
+        assertEquals(SinkType.MQTT, config.sink());
+        assertEquals(FailureMode.NETWORK_INTERRUPTION, config.failureMode());
+        assertEquals(1500L, config.interruptDurationMillis());
     }
 
     @Test

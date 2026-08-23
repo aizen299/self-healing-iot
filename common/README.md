@@ -5,7 +5,7 @@ definitions, MQTT/Kafka topic name constants, and small utilities. Kept
 deliberately thin — this is not a dumping ground for unrelated shared
 logic. No dependencies.
 
-**Status:** Phase 1 complete for the telemetry path. Kafka topic
+**Status:** Phases 1–2 complete for the telemetry path. Kafka topic
 constants arrive in Phase 6; gateway-facing event DTOs in Phases 3–4.
 
 ## Contents
@@ -17,7 +17,9 @@ constants arrive in Phase 6; gateway-facing event DTOs in Phases 3–4.
 | `DeviceStatus` | Device-reported health (`OK`/`DEGRADED`/`CRITICAL`) plus the shared `classify` rule. Distinct from the gateway's heartbeat-derived state machine, which arrives in Phase 4. |
 | `TelemetryFormat` | The wire format's decimal precisions. |
 | `SensorModel` | Deterministic, allocation-free sensor simulation. |
-| `TelemetrySink` | The publish seam. Phase 1 supplies in-memory implementations; Phase 2 adds MQTT behind the same interface. |
+| `TelemetrySink` | The publish seam. Implemented in-memory for measurement and over MQTT for the real pipeline. |
+| `TelemetrySinkFactory` | Supplies a sink per device and owns their lifetime. Per-device rather than shared because an MQTT Last Will belongs to a connection. |
+| `Presence` | Connection-level `ONLINE`/`OFFLINE`, published retained on `fleet/{id}/status`. Distinct from `DeviceStatus`. |
 | `TelemetryValidator` | Range and well-formedness checks, used by the gateway from Phase 3. |
 | `Topics` | MQTT topic names following `fleet/{deviceId}/...`. |
 | `FleetException` and subtypes | Checked exception hierarchy. |

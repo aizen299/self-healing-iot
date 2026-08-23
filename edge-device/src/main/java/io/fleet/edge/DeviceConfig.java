@@ -11,6 +11,7 @@ import java.util.Map;
  * be replayed from the record in {@code experiments/configs/}.
  *
  * @param variant               implementation under test
+ * @param sink                  where telemetry goes
  * @param deviceCount           devices in the fleet
  * @param deviceIdPrefix        prefix for generated device ids
  * @param publishIntervalMillis delay between readings, per device
@@ -18,12 +19,14 @@ import java.util.Map;
  * @param failureMode           failure to inject, if any
  * @param failAfterReadings     readings before the failure triggers
  * @param floodMultiplier       readings per tick once MESSAGE_FLOOD triggers
+ * @param interruptDurationMillis how long a NETWORK_INTERRUPTION lasts
  * @param seed                  base seed; each device derives its own from this
  * @param baseLatitude          fleet centre latitude
  * @param baseLongitude         fleet centre longitude
  */
 public record DeviceConfig(
         Variant variant,
+        SinkType sink,
         int deviceCount,
         String deviceIdPrefix,
         long publishIntervalMillis,
@@ -31,6 +34,7 @@ public record DeviceConfig(
         FailureMode failureMode,
         long failAfterReadings,
         int floodMultiplier,
+        long interruptDurationMillis,
         long seed,
         double baseLatitude,
         double baseLongitude) {
@@ -54,6 +58,9 @@ public record DeviceConfig(
         }
         if (failureMode == null) {
             throw new ConfigurationException("failureMode is required");
+        }
+        if (sink == null) {
+            throw new ConfigurationException("sink is required");
         }
         if (deviceIdPrefix == null || deviceIdPrefix.isBlank()) {
             throw new ConfigurationException("deviceIdPrefix must not be blank");
@@ -87,6 +94,18 @@ public record DeviceConfig(
             throw new ConfigurationException(
                     "floodMultiplier must be >= 2 for MESSAGE_FLOOD, got " + floodMultiplier);
         }
+        if (failureMode == FailureMode.NETWORK_INTERRUPTION) {
+            if (sink != SinkType.MQTT) {
+                throw new ConfigurationException(
+                        "NETWORK_INTERRUPTION requires FLEET_SINK=MQTT; there is no network to"
+                                + " interrupt when telemetry goes to the " + sink + " sink");
+            }
+            if (interruptDurationMillis < 1) {
+                throw new ConfigurationException(
+                        "interruptDurationMillis must be >= 1 for NETWORK_INTERRUPTION, got "
+                                + interruptDurationMillis);
+            }
+        }
         if (baseLatitude < -90.0 || baseLatitude > 90.0) {
             throw new ConfigurationException("baseLatitude out of range: " + baseLatitude);
         }
@@ -104,6 +123,7 @@ public record DeviceConfig(
     public static DeviceConfig from(Map<String, String> env) {
         return new DeviceConfig(
                 parseEnum("FLEET_VARIANT", env, "CONSTRAINED", Variant::parse),
+                parseEnum("FLEET_SINK", env, "COUNTING", SinkType::parse),
                 parseInt("FLEET_DEVICE_COUNT", env, DEFAULT_DEVICE_COUNT),
                 value("FLEET_DEVICE_ID_PREFIX", env, "device"),
                 parseLong("FLEET_PUBLISH_INTERVAL_MS", env, 1000L),
@@ -111,6 +131,7 @@ public record DeviceConfig(
                 parseEnum("FLEET_FAILURE_MODE", env, "NONE", FailureMode::parse),
                 parseLong("FLEET_FAIL_AFTER", env, 0L),
                 parseInt("FLEET_FLOOD_MULTIPLIER", env, 10),
+                parseLong("FLEET_INTERRUPT_DURATION_MS", env, 5000L),
                 parseLong("FLEET_SEED", env, 42L),
                 parseDouble("FLEET_BASE_LAT", env, 52.5200d),
                 parseDouble("FLEET_BASE_LON", env, 13.4050d));

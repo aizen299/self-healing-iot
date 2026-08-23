@@ -1,7 +1,7 @@
 package io.fleet.edge.harness;
 
 import io.fleet.common.SinkException;
-import io.fleet.common.TelemetrySink;
+import io.fleet.common.TelemetrySinkFactory;
 import io.fleet.edge.DeviceConfig;
 import io.fleet.edge.DeviceCrashedException;
 import io.fleet.edge.EdgeDevice;
@@ -43,9 +43,9 @@ public final class FleetHarness implements AutoCloseable {
     private volatile boolean started;
     private volatile long startedAtMillis;
 
-    public FleetHarness(DeviceConfig config, TelemetrySink sink) {
+    public FleetHarness(DeviceConfig config, TelemetrySinkFactory sinks) throws SinkException {
         this.config = config;
-        this.devices = DeviceFactory.createFleet(config, sink);
+        this.devices = DeviceFactory.createFleet(config, sinks);
         int threads = config.variant().threadCount(config.deviceCount());
         this.scheduler = Executors.newScheduledThreadPool(threads, namedThreads());
         // Seeded at construction so result() before start() reports a
