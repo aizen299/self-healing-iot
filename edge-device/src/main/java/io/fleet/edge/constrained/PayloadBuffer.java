@@ -111,7 +111,17 @@ public final class PayloadBuffer {
             value = -value;
         }
         long scale = POW10[decimals];
-        long scaled = Math.round(value * scale);
+        double widened = value * scale;
+        // Math.round saturates at Long.MAX_VALUE rather than failing, so
+        // without this the method would encode the saturated digits as if they
+        // were the input — a corrupt payload that still looks well formed. The
+        // NaN and infinity checks above already establish that unencodable
+        // input must fail loudly.
+        if (widened > (double) Long.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "value too large to encode with " + decimals + " decimals: " + value);
+        }
+        long scaled = Math.round(widened);
         number(scaled / scale);
         if (decimals == 0) {
             return this;

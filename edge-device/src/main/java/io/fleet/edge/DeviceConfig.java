@@ -38,6 +38,16 @@ public record DeviceConfig(
     /** Fleet size scoped by ADR-003. */
     public static final int DEFAULT_DEVICE_COUNT = 50;
 
+    /**
+     * Bounded so a generated device id cannot overflow the constrained
+     * variant's fixed 256-byte payload buffer. Without this the failure
+     * surfaces as a runtime error on every tick, which the harness counts and
+     * the run then reports as a completed run with zero readings — and it
+     * would hit only the constrained variant, silently breaking the parity
+     * the comparison depends on.
+     */
+    public static final int MAX_DEVICE_ID_PREFIX_LENGTH = 64;
+
     public DeviceConfig {
         if (variant == null) {
             throw new ConfigurationException("variant is required");
@@ -47,6 +57,11 @@ public record DeviceConfig(
         }
         if (deviceIdPrefix == null || deviceIdPrefix.isBlank()) {
             throw new ConfigurationException("deviceIdPrefix must not be blank");
+        }
+        if (deviceIdPrefix.length() > MAX_DEVICE_ID_PREFIX_LENGTH) {
+            throw new ConfigurationException(
+                    "deviceIdPrefix must be at most " + MAX_DEVICE_ID_PREFIX_LENGTH
+                            + " characters, got " + deviceIdPrefix.length());
         }
         if (deviceCount < 1) {
             throw new ConfigurationException("deviceCount must be >= 1, got " + deviceCount);
@@ -89,13 +104,13 @@ public record DeviceConfig(
     public static DeviceConfig from(Map<String, String> env) {
         return new DeviceConfig(
                 parseEnum("FLEET_VARIANT", env, "CONSTRAINED", Variant::parse),
-                (int) parseLong("FLEET_DEVICE_COUNT", env, DEFAULT_DEVICE_COUNT),
+                parseInt("FLEET_DEVICE_COUNT", env, DEFAULT_DEVICE_COUNT),
                 value("FLEET_DEVICE_ID_PREFIX", env, "device"),
                 parseLong("FLEET_PUBLISH_INTERVAL_MS", env, 1000L),
                 parseLong("FLEET_RUN_DURATION_SECONDS", env, 30L),
                 parseEnum("FLEET_FAILURE_MODE", env, "NONE", FailureMode::parse),
                 parseLong("FLEET_FAIL_AFTER", env, 0L),
-                (int) parseLong("FLEET_FLOOD_MULTIPLIER", env, 10L),
+                parseInt("FLEET_FLOOD_MULTIPLIER", env, 10),
                 parseLong("FLEET_SEED", env, 42L),
                 parseDouble("FLEET_BASE_LAT", env, 52.5200d),
                 parseDouble("FLEET_BASE_LON", env, 13.4050d));
@@ -114,6 +129,22 @@ public record DeviceConfig(
     private static String value(String key, Map<String, String> env, String fallback) {
         String raw = env.get(key);
         return (raw == null || raw.isBlank()) ? fallback : raw.trim();
+    }
+
+    /**
+     * Parses as a long and rejects anything outside int range before
+     * narrowing. A bare {@code (int)} cast would wrap a too-large value into a
+     * different, plausible one — {@code 4294967297} becomes {@code 1} — and
+     * the range checks above would then validate the wrapped number, so a run
+     * would proceed under a configuration nobody wrote.
+     */
+    private static int parseInt(String key, Map<String, String> env, int fallback) {
+        long parsed = parseLong(key, env, fallback);
+        if (parsed < Integer.MIN_VALUE || parsed > Integer.MAX_VALUE) {
+            throw new ConfigurationException(
+                    key + " must fit in a 32-bit integer, got " + parsed);
+        }
+        return (int) parsed;
     }
 
     private static long parseLong(String key, Map<String, String> env, long fallback) {

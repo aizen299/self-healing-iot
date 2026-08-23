@@ -8,6 +8,8 @@ import io.fleet.edge.sink.RecordingSink;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -50,10 +52,15 @@ class VariantPayloadEqualityTest {
         assertEquals(READINGS, naiveSink.size(), "naive reading count");
         assertEquals(naiveSink.topics(), constrainedSink.topics(), "topics must match");
 
+        // Snapshotted once. Each accessor copies the whole list, so calling
+        // them inside the loop makes the comparison quadratic — which would
+        // become the reason to shrink READINGS rather than raise it.
+        List<String> naivePayloads = naiveSink.payloads();
+        List<String> constrainedPayloads = constrainedSink.payloads();
         for (int i = 0; i < READINGS; i++) {
             assertEquals(
-                    naiveSink.payloads().get(i),
-                    constrainedSink.payloads().get(i),
+                    naivePayloads.get(i),
+                    constrainedPayloads.get(i),
                     "payload " + i + " differs between variants");
         }
     }
