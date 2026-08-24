@@ -22,6 +22,7 @@ COPY pom.xml .
 COPY common/pom.xml common/
 COPY edge-device/pom.xml edge-device/
 COPY gateway/pom.xml gateway/
+COPY stream-processor/pom.xml stream-processor/
 COPY tests/integration/pom.xml tests/integration/
 RUN --mount=type=cache,target=/root/.m2 mvn -B -q dependency:go-offline
 
@@ -30,6 +31,7 @@ FROM deps AS build
 COPY common/src common/src
 COPY edge-device/src edge-device/src
 COPY gateway/src gateway/src
+COPY stream-processor/src stream-processor/src
 # Tests are skipped here deliberately: the suite needs a broker, and an image
 # build is not the place to discover that. CI runs them against a real one.
 RUN --mount=type=cache,target=/root/.m2 mvn -B -q package -DskipTests
@@ -87,3 +89,12 @@ COPY --from=build --chown=fleet:fleet /src/edge-device/target/edge-device-*.jar 
 ENV JAVA_OPTS=""
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/edge-device.jar \"$@\"", "--"]
+
+# ---- stream processor -------------------------------------------------
+FROM runtime-base AS stream-processor
+COPY --from=build --chown=fleet:fleet /src/stream-processor/target/dependency/ ./dependency/
+COPY --from=build --chown=fleet:fleet /src/stream-processor/target/stream-processor-*.jar ./stream-processor.jar
+
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75"
+
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/stream-processor.jar \"$@\"", "--"]

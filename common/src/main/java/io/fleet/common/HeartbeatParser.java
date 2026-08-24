@@ -1,9 +1,8 @@
-package io.fleet.gateway;
+package io.fleet.common;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import io.fleet.common.Heartbeat;
 
 import java.io.IOException;
 

@@ -13,7 +13,21 @@
   <artifactId>common</artifactId>
   <name>common</name>
   <description>
-    Shared DTOs, wire-format spec, topic constants, and the deterministic
-    sensor model. Intentionally dependency-free.
+    Shared DTOs, wire-format spec, topic constants, the deterministic sensor
+    model, and the codec that reads the wire format back.
+
+    One dependency: Jackson's streaming parser. This module was
+    dependency-free until Phase 6 gave the telemetry format a second reader —
+    the gateway and the stream processor must agree on it exactly, and a
+    duplicated parser is how two components quietly stop agreeing. The
+    constrained edge device never loads it: its encoder is hand-rolled
+    precisely to avoid a JSON library on the hot path.
   </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+    </dependency>
+  </dependencies>
 </project>

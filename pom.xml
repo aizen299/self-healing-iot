@@ -19,6 +19,7 @@
     <module>common</module>
     <module>edge-device</module>
     <module>gateway</module>
+    <module>stream-processor</module>
     <module>tests/integration</module>
   </modules>
 
@@ -53,6 +54,9 @@
 
     <!-- Embedded, pure Java, 2.8 MB and no native libraries; see ADR-007. -->
     <h2.version>2.3.232</h2.version>
+
+    <!-- Matches the broker image pinned in docker-compose.yml. -->
+    <kafka.version>3.9.0</kafka.version>
   </properties>
 
   <dependencyManagement>
@@ -83,6 +87,22 @@
         <groupId>com.h2database</groupId>
         <artifactId>h2</artifactId>
         <version>${h2.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.kafka</groupId>
+        <artifactId>kafka-clients</artifactId>
+        <version>${kafka.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.kafka</groupId>
+        <artifactId>kafka-streams</artifactId>
+        <version>${kafka.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.kafka</groupId>
+        <artifactId>kafka-streams-test-utils</artifactId>
+        <version>${kafka.version}</version>
+        <scope>test</scope>
       </dependency>
     </dependencies>
   </dependencyManagement>

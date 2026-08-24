@@ -1,6 +1,5 @@
-package io.fleet.gateway;
+package io.fleet.common;
 
-import io.fleet.common.FleetException;
 
 /**
  * Thrown when a payload cannot be read as telemetry.

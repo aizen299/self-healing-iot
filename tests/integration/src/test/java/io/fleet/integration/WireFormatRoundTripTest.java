@@ -8,8 +8,8 @@ import io.fleet.edge.FailureMode;
 import io.fleet.edge.constrained.ConstrainedEdgeDevice;
 import io.fleet.edge.naive.NaiveEdgeDevice;
 import io.fleet.edge.sink.RecordingSink;
-import io.fleet.gateway.MalformedPayloadException;
-import io.fleet.gateway.TelemetryParser;
+import io.fleet.common.MalformedPayloadException;
+import io.fleet.common.TelemetryParser;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
