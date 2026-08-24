@@ -5,9 +5,9 @@ battery level, location) with a configurable publishing interval and
 deterministic, configurable failure modes, and publishes it through the
 `TelemetrySink` seam.
 
-**Status:** Phases 1–2 complete. Both variants, the fleet harness, and
-MQTT publishing are implemented and tested. Devices publish to a real
-broker with one connection each; see
+**Status:** complete through Phase 6. Both variants, the fleet harness,
+MQTT publishing, heartbeats, and all four failure modes are implemented and
+tested. Devices publish to a real broker with one connection each; see
 [`docs/api/mqtt-topics.md`](../docs/api/mqtt-topics.md).
 
 ## The two variants
@@ -151,9 +151,12 @@ reproducibility contract.
   clock.
 - The measurement sink counts and discards, so Phase 1 measures the cost
   of *producing* telemetry with no broker or network noise in the numbers.
-- One runtime dependency: the Eclipse Paho MQTT client (240 KB, no
-  transitive dependencies). Still no logging framework — it would allocate
-  on the hot path and confound the Pillar A measurements.
+- One *direct* runtime dependency: the Eclipse Paho MQTT client (240 KB, no
+  transitive dependencies). Since Phase 6, `common` also brings Jackson's
+  streaming parser onto the classpath, because the wire format gained a
+  second reader (ADR-009) — this module never loads it, since its encoder is
+  hand-rolled precisely to avoid a JSON library on the hot path. Still no
+  logging framework: it would allocate there and confound Pillar A.
 - **Each device owns its MQTT connection.** A Last Will belongs to a
   connection, so a shared client would give the whole fleet one will and
   the broker could only announce "the fleet went away" — never

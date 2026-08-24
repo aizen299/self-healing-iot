@@ -103,8 +103,10 @@ services:
     depends_on:
       broker:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+    # Deliberately does NOT depend on kafka. Forwarding is a runtime flag, not
+    # a startup requirement, and a depends_on here would drag the heaviest
+    # service in the stack into `docker compose up broker gateway` — the path
+    # three documents call the light one.
     ports:
       - "18080:8080"
     environment:
@@ -144,6 +146,16 @@ services:
     mem_limit: 512m
     stop_grace_period: 30s
     restart: unless-stopped
+    healthcheck:
+      # Every other long-running service reports its own health. Without this
+      # a topology that cannot start — a serde mismatch, an unreachable broker
+      # — crash-loops while compose reports it simply Up, and nothing consumes
+      # telemetry.processed yet to notice the silence.
+      test: ["CMD-SHELL", "test -f /app/data/streams-state && grep -q RUNNING /app/data/streams-state"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
 
   # The fleet.
   #

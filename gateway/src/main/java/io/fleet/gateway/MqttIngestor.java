@@ -14,6 +14,8 @@ import io.fleet.common.TelemetryValidator;
 import io.fleet.common.Topics;
 import io.fleet.common.StoreException;
 import io.fleet.common.ValidationException;
+import io.fleet.gateway.kafka.NoOpForwarder;
+import io.fleet.gateway.kafka.TelemetryForwarder;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttCallback;
 import org.eclipse.paho.client.mqttv3.MqttClient;
@@ -50,7 +52,7 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
     private final JsonFactory json = new JsonFactory();
     private final HealthPolicy policy;
     private final TelemetryStore store;
-    private final io.fleet.gateway.kafka.TelemetryForwarder forwarder;
+    private final TelemetryForwarder forwarder;
     /**
      * Set after construction to break a genuine cycle: the monitor announces
      * transitions through this class as its EventPublisher, and this class
@@ -76,13 +78,13 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
             GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
             HealthPolicy policy, TelemetryStore store, Clock clock) {
         this(config, registry, metrics, policy, store,
-                new io.fleet.gateway.kafka.NoOpForwarder(), clock);
+                new NoOpForwarder(), clock);
     }
 
     public MqttIngestor(
             GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
             HealthPolicy policy, TelemetryStore store,
-            io.fleet.gateway.kafka.TelemetryForwarder forwarder, Clock clock) {
+            TelemetryForwarder forwarder, Clock clock) {
         this.forwarder = forwarder;
         this.config = config;
         this.registry = registry;
