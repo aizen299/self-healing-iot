@@ -43,6 +43,10 @@ metadata:
 data:
   FLEET_SINK: mqtt
   FLEET_DEVICE_COUNT: "1"
+  # Read by the devices, and by the recovery operator, which has to recover a
+  # device's index from its id to give a replacement the right slice of the
+  # fleet. Stated rather than left to the default so the two cannot disagree.
+  FLEET_DEVICE_ID_PREFIX: device
   FLEET_VARIANT: constrained
   # Long rather than a timed run. A device that exits partway through looks
   # exactly like the failure this system detects, and nothing on screen would

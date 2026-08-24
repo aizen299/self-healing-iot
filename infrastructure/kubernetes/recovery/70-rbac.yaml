@@ -1,0 +1,53 @@
+# The operator's permissions, and the first RBAC in this project.
+#
+# Phase 8 deliberately wrote none: nothing deployed then talked to the API
+# server, so every pod set automountServiceAccountToken: false and there was
+# no Role to write that could have been exercised. This is the workload that
+# needed one.
+#
+# Namespaced, not cluster-wide. A ClusterRole would let a bug in the operator
+# delete pods in kube-system, and nothing it does reaches outside the fleet
+# namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recovery-operator
+  namespace: fleet
+  labels:
+    app: recovery-operator
+    app.kubernetes.io/part-of: self-healing-fleet
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recovery-operator
+  namespace: fleet
+rules:
+  # Exactly the four calls the operator makes, and no more.
+  #
+  # No "pods/exec", no "pods/portforward", no secrets, no configmaps: this
+  # controller reads a pod spec, creates a pod, and deletes a pod. `watch` is
+  # absent too — the trigger is a Kafka topic (ADR-011), so the operator never
+  # observes the cluster continuously.
+  #
+  # `create` and `delete` on pods is a real privilege. It is bounded by the
+  # namespace above and by the operator only ever acting on what it found via
+  # its own app=edge-device selector; the RBAC cannot express that last part,
+  # which is why the controller checks the device-id label itself.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recovery-operator
+  namespace: fleet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: recovery-operator
+subjects:
+  - kind: ServiceAccount
+    name: recovery-operator
+    namespace: fleet

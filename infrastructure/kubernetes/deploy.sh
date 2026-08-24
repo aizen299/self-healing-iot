@@ -6,6 +6,7 @@
 #
 #   ./infrastructure/kubernetes/deploy.sh            base stack, no Kafka
 #   ./infrastructure/kubernetes/deploy.sh --kafka    with Kafka and the stream processor
+#   ./infrastructure/kubernetes/deploy.sh --recovery with Kafka and the recovery operator
 #   ./infrastructure/kubernetes/deploy.sh --down     delete the cluster
 #
 # There is no registry. Images are built on the host and pushed into the kind
@@ -22,9 +23,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 
 WITH_KAFKA=false
+WITH_RECOVERY=false
 for arg in "$@"; do
   case "$arg" in
     --kafka) WITH_KAFKA=true ;;
+    # The operator consumes device.failures, so it cannot work without Kafka.
+    # Implied rather than required as a second flag: a --recovery that came up
+    # and silently recovered nothing would be worse than one that pulls in
+    # what it needs.
+    --recovery) WITH_RECOVERY=true; WITH_KAFKA=true ;;
     --down)
       kind delete cluster --name "$CLUSTER"
       exit 0
@@ -69,6 +76,9 @@ say "building images"
 IMAGES=(gateway edge-device)
 if [ "$WITH_KAFKA" = true ]; then
   IMAGES+=(stream-processor)
+fi
+if [ "$WITH_RECOVERY" = true ]; then
+  IMAGES+=(recovery-operator)
 fi
 for target in "${IMAGES[@]}"; do
   docker build -f "$ROOT/infrastructure/docker/Dockerfile" \
@@ -135,6 +145,9 @@ if [ "$WITH_KAFKA" = true ]; then
   # revert. The rollout restart below is what makes the gateway read it.
   "${KUBECTL[@]}" apply -f "$HERE/kafka/"
 fi
+if [ "$WITH_RECOVERY" = true ]; then
+  "${KUBECTL[@]}" apply -f "$HERE/recovery/"
+fi
 
 say "waiting for the pipeline"
 "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/broker --timeout=300s
@@ -160,11 +173,17 @@ say "restarting workloads onto the new images"
 if [ "$WITH_KAFKA" = true ]; then
   "${KUBECTL[@]}" -n "$NAMESPACE" rollout restart deployment/stream-processor
 fi
+if [ "$WITH_RECOVERY" = true ]; then
+  "${KUBECTL[@]}" -n "$NAMESPACE" rollout restart deployment/recovery-operator
+fi
 
 say "waiting for the workloads"
 "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/gateway --timeout=180s
 if [ "$WITH_KAFKA" = true ]; then
   "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/stream-processor --timeout=240s
+fi
+if [ "$WITH_RECOVERY" = true ]; then
+  "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/recovery-operator --timeout=240s
 fi
 "${KUBECTL[@]}" -n "$NAMESPACE" wait --for=condition=Ready pod \
   -l app=edge-device --timeout=300s
@@ -228,10 +247,24 @@ not ready, so /health and /history stay reachable during a broker outage:
   curl -s http://127.0.0.1:18081/health
   mosquitto_sub -h 127.0.0.1 -p 11883 -t 'fleet/+/telemetry' -v
 
-Kill a device and watch the gateway notice — nothing recreates it, which is
-the point (see ADR-010):
+Kill a device and watch what happens:
 
   kubectl -n $NAMESPACE delete pod edge-device-002 --grace-period=0 --force
   curl -s http://127.0.0.1:18080/devices/device-002
+  kubectl -n $NAMESPACE get pods -l app=edge-device -L device-id,recovery-id
 
 EOF
+if [ "$WITH_RECOVERY" = true ]; then
+  cat <<EOF
+The operator is watching device.failures, so that device comes back on its own:
+
+  kubectl -n $NAMESPACE logs deployment/recovery-operator -f
+
+EOF
+else
+  cat <<EOF
+Nothing recreates it — that is Phase 8's point (ADR-010). Add --recovery to
+deploy the operator that does.
+
+EOF
+fi

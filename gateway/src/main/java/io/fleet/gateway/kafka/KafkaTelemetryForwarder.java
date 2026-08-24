@@ -1,7 +1,6 @@
 package io.fleet.gateway.kafka;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonGenerator;
+import io.fleet.common.DeviceEventCodec;
 import io.fleet.common.DeviceEventRecord;
 import io.fleet.common.DeviceEventType;
 import io.fleet.common.KafkaTopics;
@@ -12,7 +11,6 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -49,7 +47,11 @@ public final class KafkaTelemetryForwarder implements TelemetryForwarder {
     private static final long DRAIN_TIMEOUT_MILLIS = 2_000L;
 
     private final Producer<String, byte[]> producer;
-    private final JsonFactory json = new JsonFactory();
+    // The codec, not a private encoder. Since Phase 9 the operator reads
+    // these events back off device.failures, so the format has a second
+    // reader and belongs in common — the same move Phase 6 made for the
+    // telemetry parser, and for the same reason.
+    private final DeviceEventCodec codec = new DeviceEventCodec();
     private final LongAdder failures = new LongAdder();
     private final BlockingQueue<ProducerRecord<String, byte[]>> pending;
     private final Thread sender;
@@ -135,7 +137,7 @@ public final class KafkaTelemetryForwarder implements TelemetryForwarder {
     public void forwardEvent(DeviceEventRecord event) {
         byte[] value;
         try {
-            value = encode(event);
+            value = codec.encode(event);
         } catch (IOException e) {
             failures.increment();
             System.err.println("could not encode a " + event.event() + " for "
@@ -170,25 +172,6 @@ public final class KafkaTelemetryForwarder implements TelemetryForwarder {
             System.err.println("kafka send to " + record.topic() + " rejected: "
                     + e.getMessage());
         }
-    }
-
-    private byte[] encode(DeviceEventRecord event) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(224);
-        try (JsonGenerator generator = json.createGenerator(out)) {
-            generator.writeStartObject();
-            generator.writeStringField("deviceId", event.deviceId());
-            generator.writeStringField("event", event.event().name());
-            generator.writeStringField("from", event.fromHealth().name());
-            generator.writeStringField("to", event.toHealth().name());
-            generator.writeNumberField("at", event.atMillis());
-            generator.writeNumberField("missedHeartbeats", event.missedHeartbeats());
-            generator.writeNumberField("recoveryDurationMillis", event.recoveryDurationMillis());
-            generator.writeEndObject();
-        }
-        // toByteArray, not toString().getBytes(): the round trip through a
-        // String costs two conversions and is silently lossy for anything
-        // that is not valid UTF-8.
-        return out.toByteArray();
     }
 
     @Override
