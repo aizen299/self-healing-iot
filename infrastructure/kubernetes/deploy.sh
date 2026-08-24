@@ -155,12 +155,16 @@ say "waiting for the pipeline"
 # Kafka before anything that talks to it, and before the gateway is restarted
 # onto the new image — not merely before the script finishes.
 #
-# The gateway builds its KafkaProducer once, at startup, and a producer whose
-# bootstrap address does not resolve yet fails to construct. The gateway then
-# continues without forwarding, for the life of the process, having printed a
-# single line about it. Restarting it into a cluster where kafka-0's pod DNS
-# does not exist yet therefore produces a stack that looks entirely healthy
-# and silently forwards nothing. Observed exactly that before this ordering.
+# Originally because the gateway built its KafkaProducer once at startup and
+# forwarded nothing for the life of the process if the bootstrap address did
+# not resolve yet — observed as a stack where every pod was healthy and
+# telemetry.raw did not exist. The gateway retries that construction now, so
+# it would recover on its own within ten seconds.
+#
+# The wait stays for the reasons that are still true: the topic-creation job in
+# this overlay needs a live broker, the stream processor refuses to start
+# against a source topic that does not exist, and a deploy script that returns
+# before the stack is usable is not much of a deploy script.
 if [ "$WITH_KAFKA" = true ]; then
   "${KUBECTL[@]}" -n "$NAMESPACE" rollout status statefulset/kafka --timeout=600s
 fi

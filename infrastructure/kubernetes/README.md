@@ -123,12 +123,13 @@ control plane and everything else. Nothing on the detection path touches it
 ./infrastructure/kubernetes/deploy.sh --kafka
 ```
 
-Order matters, and `deploy.sh` enforces it: the gateway builds its producer
-once at startup, so a gateway that rolls before Kafka's pod DNS resolves
-forwards nothing for the life of the process — a stack where every pod is
-healthy and `telemetry.raw` does not exist. The overlay also creates the five
+Order matters, and `deploy.sh` enforces it: the overlay creates the five
 topics up front rather than relying on auto-creation, because Kafka Streams
-will not start against a source topic that does not exist yet.
+will not start against a source topic that does not exist yet, and creating
+them needs a live broker. The gateway is no longer part of that argument — it
+builds its producer on its sender thread and retries every 10 s, so one that
+starts before Kafka, or outlives a Kafka restart, picks up forwarding by
+itself. It used to forward nothing for the life of the process.
 
 Applying the overlay *is* the switch — the `fleet-kafka` ConfigMap carries
 both the flag and the bootstrap address, and the gateway reads it with an

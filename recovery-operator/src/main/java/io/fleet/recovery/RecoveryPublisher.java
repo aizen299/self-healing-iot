@@ -3,6 +3,7 @@ package io.fleet.recovery;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import io.fleet.common.KafkaTopics;
+import io.fleet.common.LazyResource;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -12,7 +13,8 @@ import org.apache.kafka.common.serialization.StringSerializer;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.Properties;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -42,6 +44,14 @@ import java.util.concurrent.atomic.LongAdder;
  * the pod. The gateway's {@code recoveryDurationMillis} ends when the
  * replacement's heartbeats are confirmed — it starts at the same instant and
  * already contains this one. MTTR is the gateway's number.
+ *
+ * <p><b>The producer is built lazily and retried, never eagerly.</b> A
+ * {@code KafkaProducer} resolves {@code bootstrap.servers} in its constructor
+ * and throws when nothing resolves, so building it here at startup meant a
+ * broker that was not resolvable yet took the whole operator down before it
+ * had consumed anything — the announcement path stopping the recovery path.
+ * That is the wrong way round: this class exists to report what the controller
+ * did, and a device must still be recovered when there is nobody to tell.
  */
 public final class RecoveryPublisher implements AutoCloseable {
 
@@ -50,20 +60,39 @@ public final class RecoveryPublisher implements AutoCloseable {
     /** Marks a record on {@code device.recovery} as a controller action. */
     public static final String RECORD_KIND = "recovery-action";
 
-    private final Producer<String, byte[]> producer;
+    /** How long to wait after failing to build the producer before trying again. */
+    private static final long RETRY_INTERVAL_MILLIS = 10_000L;
+
+    private final LazyResource<Producer<String, byte[]>> producer;
     private final JsonFactory json = new JsonFactory();
     private final LongAdder failures = new LongAdder();
 
     public RecoveryPublisher(OperatorConfig config) {
-        this(buildProducer(config));
+        // Properties built once and captured, so a retry does not re-derive
+        // them — and so the closure holds a small Properties rather than the
+        // whole config record.
+        this(lazily("the kafka producer", producerProperties(config)));
     }
 
     /** Injectable producer, so the encoding can be tested with a MockProducer. */
     RecoveryPublisher(Producer<String, byte[]> producer) {
+        this(new LazyResource<>("the injected producer", () -> producer,
+                open -> open.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)),
+                RETRY_INTERVAL_MILLIS, Clock.systemUTC()));
+    }
+
+    /** @param producer injected so a test can exercise the unavailable case */
+    RecoveryPublisher(LazyResource<Producer<String, byte[]>> producer) {
         this.producer = producer;
     }
 
-    private static Producer<String, byte[]> buildProducer(OperatorConfig config) {
+    private static LazyResource<Producer<String, byte[]>> lazily(String name, Properties props) {
+        return new LazyResource<>(name, () -> new KafkaProducer<>(props),
+                open -> open.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)),
+                RETRY_INTERVAL_MILLIS, Clock.systemUTC());
+    }
+
+    private static Properties producerProperties(OperatorConfig config) {
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
@@ -79,7 +108,7 @@ public final class RecoveryPublisher implements AutoCloseable {
         props.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, "5000");
         props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, "10000");
         props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, "5000");
-        return new KafkaProducer<>(props);
+        return props;
     }
 
     /** Never throws: failing to announce a recovery must not undo one. */
@@ -93,8 +122,18 @@ public final class RecoveryPublisher implements AutoCloseable {
                     + ": " + e.getMessage());
             return;
         }
+        Producer<String, byte[]> kafka = producer.get();
+        if (kafka == null) {
+            // Kafka is not reachable yet. The recovery itself already happened
+            // — this is only the announcement — so it is counted and dropped,
+            // and the next one will try again.
+            failures.increment();
+            System.err.println("could not announce the recovery of " + recovery.deviceId()
+                    + ": kafka is not available");
+            return;
+        }
         try {
-            producer.send(new ProducerRecord<>(KafkaTopics.DEVICE_RECOVERY,
+            kafka.send(new ProducerRecord<>(KafkaTopics.DEVICE_RECOVERY,
                     recovery.deviceId(), value), (metadata, exception) -> {
                         if (exception != null) {
                             failures.increment();
@@ -160,6 +199,7 @@ public final class RecoveryPublisher implements AutoCloseable {
 
     @Override
     public void close() {
-        producer.close(java.time.Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS));
+        // Bounded, and never throws — see LazyResource.close.
+        producer.close();
     }
 }

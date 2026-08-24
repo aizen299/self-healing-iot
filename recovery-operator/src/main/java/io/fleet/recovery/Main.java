@@ -44,6 +44,14 @@ public final class Main {
 
         CountDownLatch finished = new CountDownLatch(1);
 
+        // The publisher builds its producer lazily and the consumer builds its
+        // consumer eagerly, and that asymmetry is deliberate. The consumer is
+        // the operator's trigger: without it there is nothing to do, so failing
+        // here and letting the Deployment restart is both correct and visible
+        // as CrashLoopBackOff. The publisher is only the announcement, and a
+        // device must still be recovered when there is nobody to tell — so a
+        // producer it cannot build must not take the consumer down with it,
+        // which is exactly what it used to do.
         try (RecoveryPublisher publisher = new RecoveryPublisher(config);
              FailureConsumer consumer = new FailureConsumer(config, controller, publisher)) {
 
