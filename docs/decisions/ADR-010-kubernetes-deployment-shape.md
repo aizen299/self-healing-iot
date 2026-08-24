@@ -159,6 +159,15 @@ streaming.
   "Failed to construct kafka producer". The single-attempt behaviour itself is
   a Phase 6 property of the forwarder and is left as it is; a Kafka restart
   under a running gateway still ends forwarding until the gateway restarts.
+
+  > **No longer true, since the fix that followed Phase 9.** Leaving deploy
+  > ordering to compensate for a process that could not reconnect was the
+  > wrong altitude: the gateway now builds its producer on the forwarder's
+  > sender thread and retries every 10 s until it succeeds, so a gateway that
+  > starts before Kafka — or outlives a Kafka restart — resumes forwarding on
+  > its own. `deploy.sh` still waits for Kafka, for the reasons in the next
+  > bullet (the topics have to exist before Kafka Streams starts) rather than
+  > for this one. See `common/src/main/java/io/fleet/common/LazyResource.java`.
 - **Kafka's topics are created, not auto-created.** Kafka Streams refuses to
   start against a missing source topic, and
   `KAFKA_AUTO_CREATE_TOPICS_ENABLE` only creates a topic when a producer first

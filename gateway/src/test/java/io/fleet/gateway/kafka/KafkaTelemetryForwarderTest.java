@@ -4,7 +4,9 @@ import io.fleet.common.DeviceEventRecord;
 import io.fleet.common.DeviceEventType;
 import io.fleet.common.DeviceHealth;
 import io.fleet.common.KafkaTopics;
+import io.fleet.common.LazyResource;
 import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -12,7 +14,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -28,6 +33,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * failure-specific topic, that telemetry bytes pass through untouched, that a
  * producer which throws is counted rather than allowed to escape, and that a
  * full queue drops instead of blocking the caller.
+ *
+ * <p>The last two cover the producer being built lazily on the sender thread,
+ * which is what stops a gateway that started before Kafka forwarding nothing
+ * for the life of the process.
  */
 class KafkaTelemetryForwarderTest {
 
@@ -143,6 +152,65 @@ class KafkaTelemetryForwarderTest {
             assertTrue(forwarder.forwardFailures() > 0L,
                     "dropped records must be counted so the loss stays visible");
         }
+    }
+
+    @Test
+    @DisplayName("records wait in the queue while the producer cannot be built")
+    void queuesUntilKafkaIsReachable() throws Exception {
+        // The bug this replaced: a producer that could not be constructed at
+        // startup was permanent, so a gateway that won the race against Kafka
+        // forwarded nothing until it was restarted.
+        MockProducer<String, byte[]> producer = autoCompleting();
+        AtomicBoolean kafkaUp = new AtomicBoolean(false);
+        LazyResource<Producer<String, byte[]>> lazy = new LazyResource<>("a test producer",
+                () -> {
+                    if (!kafkaUp.get()) {
+                        throw new IllegalStateException("no resolvable bootstrap urls");
+                    }
+                    return producer;
+                },
+                open -> open.close(Duration.ofSeconds(1)), 50L, Clock.systemUTC());
+
+        try (KafkaTelemetryForwarder forwarder = new KafkaTelemetryForwarder(lazy, 64)) {
+            byte[] wire = "{}".getBytes(StandardCharsets.UTF_8);
+            forwarder.forwardTelemetry("device-001", wire, 0, wire.length);
+            awaitUntil(() -> lazy.openFailureCount() > 0L);
+
+            assertTrue(producer.history().isEmpty(), "nothing can have been sent yet");
+            assertEquals(0L, forwarder.forwardFailures(),
+                    "a record waiting for the broker has not been dropped; draining the"
+                            + " queue into nothing would lose an outage's worth of telemetry"
+                            + " the queue had room for");
+
+            kafkaUp.set(true);
+            awaitUntil(() -> producer.history().size() == 1);
+        }
+    }
+
+    @Test
+    @DisplayName("shutdown does not wait on a producer that will never open")
+    void closesPromptlyWhenKafkaNeverArrives() throws Exception {
+        // Holding records for a broker that is not there is right while the
+        // gateway is running and wrong while it is stopping: the container's
+        // stop grace is also paying for the store flush and the MQTT
+        // disconnect.
+        LazyResource<Producer<String, byte[]>> lazy = new LazyResource<>("a test producer",
+                () -> {
+                    throw new IllegalStateException("no resolvable bootstrap urls");
+                },
+                open -> open.close(Duration.ofSeconds(1)), 50L, Clock.systemUTC());
+        KafkaTelemetryForwarder forwarder = new KafkaTelemetryForwarder(lazy, 64);
+
+        byte[] wire = "{}".getBytes(StandardCharsets.UTF_8);
+        forwarder.forwardTelemetry("device-001", wire, 0, wire.length);
+        awaitUntil(() -> lazy.openFailureCount() > 0L);
+
+        long start = System.currentTimeMillis();
+        forwarder.close();
+        long elapsed = System.currentTimeMillis() - start;
+
+        assertTrue(elapsed < 1_500L,
+                "close must not sit through the retry interval; took " + elapsed + "ms");
     }
 
     private static void awaitUntil(BooleanSupplier condition) throws InterruptedException {
