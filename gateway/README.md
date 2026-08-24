@@ -3,9 +3,9 @@
 Java MQTT gateway. Subscribes to device topics, validates and deserializes
 telemetry, tracks per-device state, and exposes a health/status API.
 
-**Status:** Phases 3–5 complete — ingestion, validation, the device
-registry, the HTTP API, automatic failure detection, and persistent
-history. Forwarding to Kafka arrives in Phase 6.
+**Status:** complete through Phase 8 — ingestion, validation, the device
+registry, the HTTP API, automatic failure detection, persistent history,
+and forwarding to Kafka. Runs on Docker and on Kubernetes.
 
 Two runtime dependencies — the Paho MQTT client and Jackson's streaming
 parser — and the JDK's own HTTP server rather than a web framework. See
@@ -123,11 +123,21 @@ itself rather than relying on someone remembering to check a log.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /health` | Liveness and fleet-wide counters |
+| `GET /health` | Liveness and fleet-wide counters. Always 200 while the process is alive |
+| `GET /ready` | Readiness. 200 when the broker connection is up, **503** when it is not |
 | `GET /devices` | Every known device, ordered by id |
 | `GET /devices/{id}` | One device, or 404 |
 | `GET /history?device=<id>&from=<ms>&to=<ms>` | Stored readings for a device |
 | `GET /stats?from=<ms>&to=<ms>` | Fleet average, telemetry rate, failures, mean recovery |
+
+`/health` and `/ready` are separate because they answer different
+questions, and Kubernetes asks both. `/health` is 200 whenever the process
+is alive, whatever the broker is doing — the right liveness answer, since a
+broker outage should not restart the gateway. That also makes it useless as
+a readiness probe: it could never fail, so a load balancer would keep
+routing to a gateway that had lost the broker and was recording nothing.
+`/ready` is the one that can say no. See
+[ADR-010](../docs/decisions/ADR-010-kubernetes-deployment-shape.md).
 
 `/history` and `/stats` read the store, not the registry — the registry
 keeps only the latest reading per device, which is what the store exists

@@ -5,10 +5,29 @@ battery level, location) with a configurable publishing interval and
 deterministic, configurable failure modes, and publishes it through the
 `TelemetrySink` seam.
 
-**Status:** complete through Phase 6. Both variants, the fleet harness,
+**Status:** complete through Phase 8. Both variants, the fleet harness,
 MQTT publishing, heartbeats, and all four failure modes are implemented and
 tested. Devices publish to a real broker with one connection each; see
-[`docs/api/mqtt-topics.md`](../docs/api/mqtt-topics.md).
+[`docs/api/mqtt-topics.md`](../docs/api/mqtt-topics.md). A process can run
+the whole fleet or a single device, which is what Kubernetes needs.
+
+## One process, or one device per process
+
+`FLEET_DEVICE_INDEX_OFFSET` slices the fleet by index: a process runs
+devices `offset+1` through `offset+count`. Three processes with
+`FLEET_DEVICE_COUNT=1` and offsets 0, 1, 2 are between them exactly the
+fleet one process with `FLEET_DEVICE_COUNT=3` runs.
+
+It slices by **index** rather than renaming, because both the device id and
+the sensor seed derive from the index. `device-002` in its own pod is
+therefore the same simulated device, producing the same readings, as
+`device-002` inside the shared harness — the two deployments run one
+experiment, not two that look alike.
+
+The shared harness remains what Pillar A measures. A per-process JVM costs
+about 64 MB of baseline before the device has allocated anything, which
+would swamp the difference between the two variants; per-device processes
+are for Pillar B's recovery work, at the 3–10 devices ADR-003 scopes for it.
 
 ## The two variants
 
@@ -44,6 +63,7 @@ environment block and can be replayed from `experiments/configs/`.
 | `FLEET_SINK` | `COUNTING` | `COUNTING` (no broker needed) or `MQTT` |
 | `FLEET_DEVICE_COUNT` | `50` | Fleet size (scoped by ADR-003) |
 | `FLEET_DEVICE_ID_PREFIX` | `device` | Produces ids like `device-007` |
+| `FLEET_DEVICE_INDEX_OFFSET` | `0` | First device index minus one; lets a process own a slice of the fleet |
 | `FLEET_PUBLISH_INTERVAL_MS` | `1000` | Per-device publish period |
 | `FLEET_RUN_DURATION_SECONDS` | `30` | Run length |
 | `FLEET_FAILURE_MODE` | `NONE` | `NONE`, `CRASH`, `MESSAGE_FLOOD`, `NETWORK_INTERRUPTION` |

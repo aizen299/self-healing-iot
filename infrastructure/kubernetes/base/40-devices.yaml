@@ -1,0 +1,302 @@
+# The fleet: one device, one Pod.
+#
+# This is the shape Kubernetes changes. Compose ran the whole fleet in one
+# container because ADR-003 scopes the simulation to a shared-JVM harness —
+# fifty JVMs do not fit on this host. That harness has not gone away and is
+# still what Pillar A measures. These pods are for Pillar B: automated
+# detection and recovery needs a device to be a thing that can be killed and
+# replaced on its own, and three devices is inside the 3–10 range ADR-003
+# already scoped for exactly this.
+#
+# A device in a pod is the same simulated device it would be inside the
+# harness. FLEET_DEVICE_INDEX_OFFSET slices the fleet by index, and both the
+# id and the sensor seed derive from that index, so device-002 here produces
+# the readings device-002 produces there.
+#
+# ---- Why bare Pods, and why restartPolicy: Never ----
+#
+# Because the kubelet must not be the recovery mechanism.
+#
+# A Deployment would restart a crashed device in about a second, and a
+# ReplicaSet would recreate a deleted one just as fast. Either would mean
+# Phase 9's operator never gets to act, and the MTTR the research reports
+# would be a measurement of Kubernetes' restart loop rather than of the
+# failure-detection-and-recovery loop that is the subject.
+#
+# So a device that dies stays dead until something decides to replace it:
+#   device stops → gateway detects (Last Will or heartbeat timeout)
+#     → failure event → operator → replacement pod
+#
+# That is Pillar B's whole measurement path. In a system whose job was
+# uptime rather than measuring recovery, a Deployment would be the right
+# answer and this comment would be wrong. See ADR-010.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: edge-device-001
+  namespace: fleet
+  labels:
+    app: edge-device
+    device-id: device-001
+    fleet-id: fleet-local
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  # Each device publishes a retained SHUTDOWN and a real DISCONNECT on the way
+  # out. Cut that short and the broker fires a Last Will instead, so the
+  # gateway reads a deliberate stop as a failure — the confusion ADR-006 split
+  # SHUTDOWN from OFFLINE to prevent.
+  terminationGracePeriodSeconds: 30
+  # Kubernetes has no `depends_on: condition: service_healthy`. Without this
+  # the device starts before the broker is accepting connections, fails its
+  # initial connect, and — with restartPolicy: Never — stays dead. That is the
+  # cost of the bare Pod, and it is paid here rather than by letting the
+  # kubelet restart devices.
+  #
+  # Deliberately not solved in the device instead. A device that cannot reach
+  # its broker at startup is a failure the harness reports, and teaching it to
+  # retry forever would hide a real fault behind a hang.
+  #
+  # The mosquitto image, so the wait is a real MQTT connect rather than a TCP
+  # probe — the same check the broker's own readiness probe makes.
+  initContainers:
+    - name: wait-for-broker
+      image: eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
+      env:
+        - name: MQTT_BROKER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: MQTT_BROKER_URL
+      command:
+        - sh
+        - -c
+        # Host parsed out of the one URL the ConfigMap defines, so the broker's
+        # address is not written down a second time here.
+        - |
+          host=${MQTT_BROKER_URL#*://}; host=${host%%:*}
+          until mosquitto_pub -h "$host" -t startup -m wait -q 0 2>/dev/null; do
+            echo "waiting for the broker at $host"
+            sleep 2
+          done
+          echo "broker is accepting connections"
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi
+  containers:
+    - name: device
+      image: fleet/edge-device:0.1.0
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: FLEET_SINK
+          value: mqtt
+        - name: MQTT_BROKER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: MQTT_BROKER_URL
+        - name: FLEET_PUBLISH_INTERVAL_MS
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: TICK_INTERVAL_MS
+        - name: FLEET_DEVICE_COUNT
+          value: "1"
+        - name: FLEET_DEVICE_INDEX_OFFSET
+          value: "0"
+        - name: FLEET_VARIANT
+          value: constrained
+        # Long rather than a timed run. A device that exits partway through
+        # looks exactly like the failure this system detects, and nothing on
+        # screen would distinguish that from a bug.
+        - name: FLEET_RUN_DURATION_SECONDS
+          value: "86400"
+        # Stated, not defaulted: the heap cap is Pillar A's independent
+        # variable and never belongs in an image.
+        - name: JAVA_OPTS
+          value: -Xmx64m
+      resources:
+        requests:
+          cpu: 100m
+          memory: 96Mi
+        limits:
+          memory: 192Mi
+      # No liveness probe, and that is the point. The gateway decides whether
+      # a device is alive, from heartbeats and the broker's Last Will
+      # (ADR-006). A kubelet probe here would be a second, competing failure
+      # detector racing the one the research measures.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: edge-device-002
+  namespace: fleet
+  labels:
+    app: edge-device
+    device-id: device-002
+    fleet-id: fleet-local
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 30
+  # Kubernetes has no `depends_on: condition: service_healthy`. Without this
+  # the device starts before the broker is accepting connections, fails its
+  # initial connect, and — with restartPolicy: Never — stays dead. That is the
+  # cost of the bare Pod, and it is paid here rather than by letting the
+  # kubelet restart devices.
+  #
+  # Deliberately not solved in the device instead. A device that cannot reach
+  # its broker at startup is a failure the harness reports, and teaching it to
+  # retry forever would hide a real fault behind a hang.
+  #
+  # The mosquitto image, so the wait is a real MQTT connect rather than a TCP
+  # probe — the same check the broker's own readiness probe makes.
+  initContainers:
+    - name: wait-for-broker
+      image: eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
+      env:
+        - name: MQTT_BROKER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: MQTT_BROKER_URL
+      command:
+        - sh
+        - -c
+        # Host parsed out of the one URL the ConfigMap defines, so the broker's
+        # address is not written down a second time here.
+        - |
+          host=${MQTT_BROKER_URL#*://}; host=${host%%:*}
+          until mosquitto_pub -h "$host" -t startup -m wait -q 0 2>/dev/null; do
+            echo "waiting for the broker at $host"
+            sleep 2
+          done
+          echo "broker is accepting connections"
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi
+  containers:
+    - name: device
+      image: fleet/edge-device:0.1.0
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: FLEET_SINK
+          value: mqtt
+        - name: MQTT_BROKER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: MQTT_BROKER_URL
+        - name: FLEET_PUBLISH_INTERVAL_MS
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: TICK_INTERVAL_MS
+        - name: FLEET_DEVICE_COUNT
+          value: "1"
+        - name: FLEET_DEVICE_INDEX_OFFSET
+          value: "1"
+        - name: FLEET_VARIANT
+          value: constrained
+        - name: FLEET_RUN_DURATION_SECONDS
+          value: "86400"
+        - name: JAVA_OPTS
+          value: -Xmx64m
+      resources:
+        requests:
+          cpu: 100m
+          memory: 96Mi
+        limits:
+          memory: 192Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: edge-device-003
+  namespace: fleet
+  labels:
+    app: edge-device
+    device-id: device-003
+    fleet-id: fleet-local
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 30
+  # Kubernetes has no `depends_on: condition: service_healthy`. Without this
+  # the device starts before the broker is accepting connections, fails its
+  # initial connect, and — with restartPolicy: Never — stays dead. That is the
+  # cost of the bare Pod, and it is paid here rather than by letting the
+  # kubelet restart devices.
+  #
+  # Deliberately not solved in the device instead. A device that cannot reach
+  # its broker at startup is a failure the harness reports, and teaching it to
+  # retry forever would hide a real fault behind a hang.
+  #
+  # The mosquitto image, so the wait is a real MQTT connect rather than a TCP
+  # probe — the same check the broker's own readiness probe makes.
+  initContainers:
+    - name: wait-for-broker
+      image: eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
+      env:
+        - name: MQTT_BROKER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: MQTT_BROKER_URL
+      command:
+        - sh
+        - -c
+        # Host parsed out of the one URL the ConfigMap defines, so the broker's
+        # address is not written down a second time here.
+        - |
+          host=${MQTT_BROKER_URL#*://}; host=${host%%:*}
+          until mosquitto_pub -h "$host" -t startup -m wait -q 0 2>/dev/null; do
+            echo "waiting for the broker at $host"
+            sleep 2
+          done
+          echo "broker is accepting connections"
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi
+  containers:
+    - name: device
+      image: fleet/edge-device:0.1.0
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: FLEET_SINK
+          value: mqtt
+        - name: MQTT_BROKER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: MQTT_BROKER_URL
+        - name: FLEET_PUBLISH_INTERVAL_MS
+          valueFrom:
+            configMapKeyRef:
+              name: fleet-config
+              key: TICK_INTERVAL_MS
+        - name: FLEET_DEVICE_COUNT
+          value: "1"
+        - name: FLEET_DEVICE_INDEX_OFFSET
+          value: "2"
+        - name: FLEET_VARIANT
+          value: constrained
+        - name: FLEET_RUN_DURATION_SECONDS
+          value: "86400"
+        - name: JAVA_OPTS
+          value: -Xmx64m
+      resources:
+        requests:
+          cpu: 100m
+          memory: 96Mi
+        limits:
+          memory: 192Mi

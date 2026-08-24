@@ -1,0 +1,9 @@
+# Everything lives in one namespace so the whole stack is deleted, described,
+# or quota'd as a unit — and so `kubectl delete namespace fleet` is a complete
+# teardown rather than a list of objects to remember.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fleet
+  labels:
+    app.kubernetes.io/part-of: self-healing-fleet

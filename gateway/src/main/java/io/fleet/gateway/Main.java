@@ -48,7 +48,11 @@ public final class Main {
                      store, forwarder, java.time.Clock.systemUTC());
              HealthMonitor monitor = new HealthMonitor(registry, policy, metrics,
                      ingestor, store, forwarder, config.monitorIntervalMillis());
-             HealthApi api = new HealthApi(config, registry, metrics, store)) {
+             // The ingestor supplies readiness: /ready is 503 until the
+             // broker connection is up, so a Kubernetes Service does not
+             // route to a gateway that is running but recording nothing.
+             HealthApi api = new HealthApi(config, registry, metrics, store,
+                     ingestor::isConnected)) {
 
             // Closes the cycle described on MqttIngestor.onTransition: the
             // monitor announces what the ingestor observes, and publishes
@@ -59,7 +63,8 @@ public final class Main {
             monitor.start();
             maintenance.start();
             api.start();
-            System.out.printf(Locale.ROOT, "health API on http://%s:%d/health%n",
+            System.out.printf(Locale.ROOT, "health API on http://%s:%d/health (readiness"
+                            + " at /ready)%n",
                     config.httpHost(), api.port());
 
             // The hook waits for the main thread to finish shutting down.

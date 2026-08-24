@@ -1,0 +1,37 @@
+# A one-node kind cluster.
+#
+# kind rather than Minikube because kind runs its node as a container inside
+# the Docker VM this machine already has, while Minikube starts a second VM.
+# Docker Desktop is already holding about half of an 8 GB host, and Phase 8
+# measures memory on it — see ADR-010.
+#
+# One node, not three. A control plane plus two workers is a more realistic
+# topology and costs roughly 400 MB more for nothing this phase demonstrates:
+# every workload here is a singleton, and Phase 9's recovery replaces a pod,
+# not a node.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: fleet
+
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # The gateway's NodePort, published on 18080 for the same reason compose
+      # does: Jenkins holds 8080 on this machine, and a bind to 0.0.0.0 loses
+      # to its 127.0.0.1 bind, so the stack would look healthy while curl
+      # reached Jenkins.
+      - containerPort: 30080
+        hostPort: 18080
+        protocol: TCP
+      # The broker, so mosquitto_sub from the host can watch the fleet — the
+      # same debugging path the earlier phases used.
+      #
+      # 11883, not 1883. On 1883 the cluster's broker impersonates the local
+      # development broker that everything else points at, and `mvn test`
+      # silently runs the MQTT integration tests against Kubernetes instead of
+      # skipping them — leaving their retained presence behind as ghosts in a
+      # fleet the tests know nothing about. A suite whose behaviour depends on
+      # whether a cluster happens to be running is not reproducible.
+      - containerPort: 30883
+        hostPort: 11883
+        protocol: TCP

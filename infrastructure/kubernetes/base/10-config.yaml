@@ -1,0 +1,27 @@
+# Settings both halves of the pipeline have to agree on.
+#
+# Heartbeats ride the telemetry tick (ADR-006), so the gateway's expected
+# interval and the fleet's publish interval must be the same number. Compose
+# expressed that with a YAML anchor, which is a build-time substitution: the
+# two containers still received two independent literals, and nothing stopped
+# them drifting once the file had been rendered.
+#
+# A ConfigMap is stronger. Both workloads read the same key from the same
+# object at run time, so changing the tick changes it for both or for neither.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fleet-config
+  namespace: fleet
+  labels:
+    app.kubernetes.io/part-of: self-healing-fleet
+data:
+  # The one value the gateway and the devices must not disagree about.
+  TICK_INTERVAL_MS: "1000"
+
+  # In-cluster DNS. The broker Service is `broker` in this namespace.
+  MQTT_BROKER_URL: tcp://broker:1883
+
+  # Fleet identity, carried on every device workload as a label so the Phase 9
+  # operator can tell this fleet's pods from anything else in the namespace.
+  FLEET_ID: fleet-local

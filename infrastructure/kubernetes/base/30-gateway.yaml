@@ -1,0 +1,179 @@
+# The gateway: the system of record, and the only thing that decides a device
+# has failed.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gateway-data
+  namespace: fleet
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: fleet
+  labels:
+    app: gateway
+spec:
+  type: NodePort
+  selector:
+    app: gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      # kind maps this to the host's 18080.
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: fleet
+  labels:
+    app: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  # Recreate, for two independent reasons, either of which is sufficient.
+  #
+  # The store: H2 is embedded and takes an exclusive file lock. A rolling
+  # update starts the new pod before the old one exits, and the second pod
+  # cannot open the database — so it would come up with history silently
+  # disabled, which is precisely the "gaps travel with the data" failure
+  # ADR-007 was amended to make visible.
+  #
+  # The broker: two gateways with the same MQTT client id cannot both be
+  # connected. The broker disconnects the older one, and for the overlap the
+  # fleet is monitored by a pod that is about to be deleted.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      automountServiceAccountToken: false
+      # Longer than the application's own 10-second shutdown grace, as in
+      # compose. At the 30-second default they race, and losing means SIGKILL
+      # part-way through disconnecting.
+      terminationGracePeriodSeconds: 45
+      # Kubernetes has no `depends_on: condition: service_healthy`. The Deployment
+      # would eventually restart the gateway into a working broker, but the first
+      # boot of a healthy stack would report RESTARTS: 2 — which is exactly the
+      # signal an operator uses to tell a healthy stack from a sick one.
+      initContainers:
+        - name: wait-for-broker
+          image: eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
+          env:
+            - name: MQTT_BROKER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: fleet-config
+                  key: MQTT_BROKER_URL
+          command:
+            - sh
+            - -c
+            # Host parsed out of the one URL the ConfigMap defines, so the broker's
+            # address is not written down a second time here.
+            - |
+              host=${MQTT_BROKER_URL#*://}; host=${host%%:*}
+              until mosquitto_pub -h "$host" -t startup -m wait -q 0 2>/dev/null; do
+                echo "waiting for the broker at $host"
+                sleep 2
+              done
+              echo "broker is accepting connections"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+      securityContext:
+        # The image already runs as the unprivileged `fleet` user; this makes
+        # the PVC arrive owned by that user's group rather than by root, which
+        # is otherwise the first thing to break when a volume appears.
+        fsGroup: 1000
+      containers:
+        - name: gateway
+          image: fleet/gateway:0.1.0
+          # The images are built locally and side-loaded with `kind load`.
+          # There is no registry to pull from, and Always would fail.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: MQTT_BROKER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: fleet-config
+                  key: MQTT_BROKER_URL
+            # The same key the devices read as FLEET_PUBLISH_INTERVAL_MS.
+            # Two names for one value, because the two sides of the contract
+            # call it different things — but one source, so they cannot drift.
+            - name: GATEWAY_HEARTBEAT_INTERVAL_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: fleet-config
+                  key: TICK_INTERVAL_MS
+            - name: GATEWAY_HTTP_HOST
+              value: 0.0.0.0
+            - name: GATEWAY_HTTP_PORT
+              value: "8080"
+            - name: GATEWAY_CLIENT_ID
+              value: fleet-gateway
+            # Off. Kafka is a downstream copy and nothing on the detection
+            # path touches it (ADR-009); the overlay in ../kafka/ turns it on.
+            - name: GATEWAY_KAFKA_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          # /ready, not /health: 503 until the broker connection is up, so the
+          # Service does not route to a gateway that is running and recording
+          # nothing.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          # Liveness is /health, deliberately. /health answers 200 while the
+          # process lives, whatever the broker is doing — which is the correct
+          # liveness question. Probing /ready here would restart every gateway
+          # in a loop during a broker outage, when the right behaviour is to
+          # stay up, keep serving history, and reconnect.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: gateway-data

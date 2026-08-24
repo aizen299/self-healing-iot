@@ -1,4 +1,6 @@
 # API documentation
 
-Gateway health/status API documentation goes here once the gateway
-exists (Phase 3, extended in Phase 4 as failure detection lands).
+| Document | Contract |
+|---|---|
+| [`mqtt-topics.md`](mqtt-topics.md) | The MQTT wire format: topics, payloads, QoS, retention, and Last Will |
+| [`gateway-http.md`](gateway-http.md) | The gateway's read-only HTTP API |
