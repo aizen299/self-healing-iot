@@ -9,7 +9,12 @@ package io.fleet.recovery;
  *
  * @param deviceId        device that failed
  * @param recoveryId      deterministic id derived from the failure
- * @param replacementPod  pod created, or the one found already present
+ * @param pod             the pod this recovery concerns. Named neutrally
+ *                        because it is not always a replacement: for
+ *                        {@code NOT_NEEDED} it is the live pod that made a
+ *                        replacement unnecessary, and calling that field
+ *                        "replacementPod" would have anyone counting
+ *                        replacements count it as one
  * @param detectedAtMillis when the gateway declared the failure
  * @param actedAtMillis   when the operator finished acting
  * @param outcome         what actually happened
@@ -17,7 +22,7 @@ package io.fleet.recovery;
 public record Recovery(
         String deviceId,
         String recoveryId,
-        String replacementPod,
+        String pod,
         long detectedAtMillis,
         long actedAtMillis,
         RecoveryOutcome outcome) {
@@ -34,5 +39,19 @@ public record Recovery(
      */
     public long durationMillis() {
         return actedAtMillis - detectedAtMillis;
+    }
+
+    /**
+     * Whether {@link #durationMillis()} is a measurement rather than just
+     * arithmetic.
+     *
+     * <p>False unless something was actually replaced — for any other outcome
+     * the subtraction spans a failure this recovery did not answer. False too
+     * when it comes out negative, which it can: the two ends are read from two
+     * different pods' clocks, and a gateway running slightly ahead of the
+     * operator turns a 160 ms recovery into a negative one.
+     */
+    public boolean hasMeaningfulDuration() {
+        return outcome == RecoveryOutcome.REPLACED && durationMillis() >= 0L;
     }
 }

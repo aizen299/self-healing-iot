@@ -120,21 +120,30 @@ public final class RecoveryPublisher implements AutoCloseable {
             generator.writeStringField("deviceId", recovery.deviceId());
             generator.writeStringField("recoveryId", recovery.recoveryId());
             generator.writeStringField("outcome", recovery.outcome().name());
-            generator.writeStringField("replacementPod", recovery.replacementPod());
+            // Two names for one value, because it is two different things. A
+            // consumer counting replacements must not be handed the pod that
+            // made a replacement unnecessary under a field called
+            // "replacementPod".
+            if (recovery.outcome() == RecoveryOutcome.NOT_NEEDED) {
+                generator.writeNullField("replacementPod");
+                generator.writeStringField("existingPod", recovery.pod());
+            } else {
+                generator.writeStringField("replacementPod", recovery.pod());
+            }
             generator.writeNumberField("detectedAt", recovery.detectedAtMillis());
             generator.writeNumberField("actedAt", recovery.actedAtMillis());
             // Named for what it measures rather than "mttr", which it is not:
             // it ends when the API server accepts the pod, not when the device
             // is publishing again.
             //
-            // Null unless something was actually replaced. For any other
-            // outcome the subtraction is still arithmetic but not a
-            // measurement: a duplicate arriving thirty seconds after the
-            // failure it repeats would report a 29-second "replacement",
-            // and anything averaging this field across the topic would be
-            // badly wrong in the direction that flatters nothing. Observed at
-            // 29420 ms on a replayed event.
-            if (recovery.outcome() == RecoveryOutcome.REPLACED) {
+            // Null unless the number means something. For an outcome that
+            // replaced nothing the subtraction spans a failure this recovery
+            // did not answer — a duplicate arriving thirty seconds later
+            // reported a 29-second "replacement" — and a negative result means
+            // the gateway's clock and the operator's disagree. Anything
+            // averaging this field across the topic would be wrong in both
+            // cases.
+            if (recovery.hasMeaningfulDuration()) {
                 generator.writeNumberField("detectionToReplacementMillis",
                         recovery.durationMillis());
             } else {

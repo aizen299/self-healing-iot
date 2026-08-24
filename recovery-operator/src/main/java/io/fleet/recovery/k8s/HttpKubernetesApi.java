@@ -1,9 +1,11 @@
 package io.fleet.recovery.k8s;
 
 import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -128,20 +130,6 @@ public final class HttpKubernetesApi implements KubernetesApi {
     }
 
     @Override
-    public String readPod(String name) throws KubernetesException {
-        HttpResponse<String> response = send(request(podsUrl() + "/" + encode(name))
-                .GET().build(), "read pod " + name);
-        if (response.statusCode() == 404) {
-            return null;
-        }
-        if (response.statusCode() != 200) {
-            throw new KubernetesException("reading pod " + name + " returned HTTP "
-                    + response.statusCode() + ": " + response.body());
-        }
-        return response.body();
-    }
-
-    @Override
     public boolean createPod(String manifestJson) throws KubernetesException {
         HttpResponse<String> response = send(request(podsUrl())
                 .header("Content-Type", "application/json")
@@ -150,14 +138,27 @@ public final class HttpKubernetesApi implements KubernetesApi {
         if (response.statusCode() == 201 || response.statusCode() == 200) {
             return true;
         }
-        // 409 is the idempotency guarantee, not a failure: the replacement's
-        // name is derived from the recovery id, so a duplicate failure event
-        // asks the API server to create a pod that is already there and the
-        // API server refuses. That refusal is what makes "the same failure
-        // event twice must not create two replacements" true across operator
-        // restarts, where an in-memory ledger would have forgotten.
+        // 409 *AlreadyExists* is the idempotency guarantee, not a failure: the
+        // replacement's name is derived from the recovery id, so a duplicate
+        // failure event asks the API server to create a pod that is already
+        // there and the API server refuses. That refusal is what makes "the
+        // same failure event twice must not create two replacements" true
+        // across operator restarts, where an in-memory ledger would have
+        // forgotten.
+        //
+        // The reason is checked rather than inferred from the status. A 409
+        // that means something else — and Conflict covers more than one thing
+        // — would otherwise be reported as a successful no-op, the device
+        // would be recorded as handled, every redelivery would short-circuit,
+        // and the fleet would stay one device down while the topic said it had
+        // recovered. The guarantee this whole design rests on should assert
+        // what it relies on.
         if (response.statusCode() == 409) {
-            return false;
+            if (isAlreadyExists(response.body())) {
+                return false;
+            }
+            throw new KubernetesException("creating a pod was refused with a conflict that is"
+                    + " not AlreadyExists: " + response.body());
         }
         throw new KubernetesException("creating a pod returned HTTP " + response.statusCode()
                 + ": " + response.body());
@@ -186,6 +187,33 @@ public final class HttpKubernetesApi implements KubernetesApi {
             throw new KubernetesException("deleting pod " + name + " returned HTTP "
                     + response.statusCode() + ": " + response.body());
         }
+    }
+
+    /**
+     * Whether a Status body names {@code AlreadyExists} as its reason.
+     *
+     * <p>Read from the field rather than matched in the raw text: a pod whose
+     * name or labels happened to contain the word would otherwise decide this.
+     */
+    private boolean isAlreadyExists(String body) {
+        try (JsonParser parser = json.createParser(body)) {
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
+                return false;
+            }
+            while (parser.nextToken() != JsonToken.END_OBJECT) {
+                String field = parser.currentName();
+                parser.nextToken();
+                if ("reason".equals(field)) {
+                    return "AlreadyExists".equals(parser.getText());
+                }
+                parser.skipChildren();
+            }
+        } catch (IOException e) {
+            // A 409 whose body will not parse is not something to treat as a
+            // successful no-op.
+            return false;
+        }
+        return false;
     }
 
     private String podsUrl() {
@@ -240,7 +268,7 @@ public final class HttpKubernetesApi implements KubernetesApi {
                 if ("items".equals(parser.currentName())) {
                     parser.nextToken();
                     while (parser.nextToken() != JsonToken.END_ARRAY) {
-                        pods.add(parsePod(parser));
+                        pods.add(parsePod(parser, json));
                     }
                 } else {
                     parser.nextToken();
@@ -253,46 +281,74 @@ public final class HttpKubernetesApi implements KubernetesApi {
         return pods;
     }
 
-    private static PodRef parsePod(JsonParser parser) throws IOException {
+    /**
+     * Reads one pod, keeping both the three fields the operator decides on and
+     * the manifest it will clone.
+     *
+     * <p>The manifest is copied out here because this is the only place it
+     * passes through: re-serialising as we go costs one buffer per pod and
+     * saves a second API call per recovery.
+     */
+    private static PodRef parsePod(JsonParser parser, JsonFactory json) throws IOException {
         String name = null;
         String phase = "Unknown";
         Map<String, String> labels = new LinkedHashMap<>();
+        ByteArrayOutputStream raw = new ByteArrayOutputStream(4096);
+        JsonGenerator manifest = json.createGenerator(raw);
+        manifest.writeStartObject();
 
         while (parser.nextToken() != JsonToken.END_OBJECT) {
             String section = parser.currentName();
             parser.nextToken();
-            switch (section) {
-                case "metadata" -> {
-                    while (parser.nextToken() != JsonToken.END_OBJECT) {
-                        String field = parser.currentName();
-                        parser.nextToken();
-                        if ("name".equals(field)) {
-                            name = parser.getText();
-                        } else if ("labels".equals(field)) {
-                            while (parser.nextToken() != JsonToken.END_OBJECT) {
-                                String key = parser.currentName();
-                                parser.nextToken();
-                                labels.put(key, parser.getText());
+            // Buffered whole, then re-read for the three fields. Copying the
+            // structure is what lets the replacement be cloned without a
+            // second GET, and re-reading a few hundred bytes twice is cheaper
+            // than a round trip to the API server.
+            manifest.writeFieldName(section);
+            manifest.copyCurrentStructure(parser);
+        }
+        manifest.writeEndObject();
+        manifest.close();
+
+        String body = raw.toString(StandardCharsets.UTF_8);
+        try (JsonParser fields = json.createParser(body)) {
+            fields.nextToken();
+            while (fields.nextToken() != JsonToken.END_OBJECT) {
+                String section = fields.currentName();
+                fields.nextToken();
+                switch (section) {
+                    case "metadata" -> {
+                        while (fields.nextToken() != JsonToken.END_OBJECT) {
+                            String field = fields.currentName();
+                            fields.nextToken();
+                            if ("name".equals(field)) {
+                                name = fields.getText();
+                            } else if ("labels".equals(field)) {
+                                while (fields.nextToken() != JsonToken.END_OBJECT) {
+                                    String key = fields.currentName();
+                                    fields.nextToken();
+                                    labels.put(key, fields.getText());
+                                }
+                            } else {
+                                fields.skipChildren();
                             }
-                        } else {
-                            parser.skipChildren();
                         }
                     }
-                }
-                case "status" -> {
-                    while (parser.nextToken() != JsonToken.END_OBJECT) {
-                        String field = parser.currentName();
-                        parser.nextToken();
-                        if ("phase".equals(field)) {
-                            phase = parser.getText();
-                        } else {
-                            parser.skipChildren();
+                    case "status" -> {
+                        while (fields.nextToken() != JsonToken.END_OBJECT) {
+                            String field = fields.currentName();
+                            fields.nextToken();
+                            if ("phase".equals(field)) {
+                                phase = fields.getText();
+                            } else {
+                                fields.skipChildren();
+                            }
                         }
                     }
+                    default -> fields.skipChildren();
                 }
-                default -> parser.skipChildren();
             }
         }
-        return new PodRef(name, phase, labels);
+        return new PodRef(name, phase, labels, body);
     }
 }

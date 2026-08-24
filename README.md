@@ -78,7 +78,7 @@ and current implementation status.
 
 **Phases 1–9 complete — a self-healing fleet.** A device that dies is
 detected, replaced, and back online without anyone touching it. Every
-module is implemented, tested, and runnable; 181 tests pass.
+module is implemented, tested, and runnable; 204 tests pass.
 
 Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
 database need a server, and the phase that supplies servers came after both

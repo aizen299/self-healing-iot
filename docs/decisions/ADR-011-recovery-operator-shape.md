@@ -118,7 +118,27 @@ the way up.
 
 **Offsets are committed after acting, never before.** Committing first turns
 an operator crash mid-recovery into a failure nobody ever handles: the event
-is marked consumed and the device stays dead.
+is marked consumed and the device stays dead. A commit that *fails* is
+tolerated for the same reason it is safe to commit late — redelivery creates
+nothing — where letting it escape the poll loop would kill the process.
+
+**The replacement is created before the old pod is deleted.** The other order
+is destructive: a create that fails once the stale pods are gone leaves
+nothing to clone on the retry, and with the whole fleet down there is no
+sibling either, so the operator's own delete makes the device permanently
+unrecoverable.
+
+**`OPERATOR_REPLACE_LIVE_DEVICES` must not disable the storm guard.** The
+flag means "a Running pod does not block replacement", for the wedged case.
+Letting it also skip the in-flight check turns it into a churn loop, so the
+guard is separate and keyed on the last recovery that actually produced a
+replacement — keyed on the last *decision* it is overwritten by its own
+NOT_NEEDED and the third event of a storm gets through.
+
+**Phase `Unknown` is not alive.** A pod goes Unknown when its kubelet stops
+reporting, which is a dead or partitioned node — one of the failure modes
+recovery exists for. Counting it as present leaves the fleet permanently
+short while the operator reports it had nothing to do.
 
 ### The replacement is cloned, not templated
 
@@ -144,8 +164,9 @@ mechanism for a problem already solved.
 ## Consequences
 
 - **The first RBAC in this project.** Namespaced, and limited to
-  `get, list, create, delete` on pods — no `watch`, since the trigger is a
-  topic. Phase 8 deferred RBAC for the honest reason that nothing then
+  `list, create, delete` on pods — no `watch`, since the trigger is a topic,
+  and no `get`, since the list response already carries every pod's spec (which
+  is also what removes a second API call per recovery from the measured path). Phase 8 deferred RBAC for the honest reason that nothing then
   deployed talked to the API server; this is the workload that needed it.
 - **`device.recovery` now has two producers with unrelated schemas.** The
   gateway publishes a `DEVICE_RECOVERED` health transition when a replacement

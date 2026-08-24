@@ -30,11 +30,13 @@ public final class Main {
         KubernetesApi kubernetes = HttpKubernetesApi.inCluster(
                 config.namespace(), Duration.ofSeconds(config.apiTimeoutSeconds()));
 
-        // Fail fast, and fail here. The operator's whole job needs API access,
-        // and finding out at the first failure — possibly hours in, with a
-        // device already dead — turns a misconfigured RBAC rule into a missed
-        // recovery. One list call at startup makes it a crash-loop instead,
-        // which is visible in `kubectl get pods`.
+        // Fail fast on the one permission that can be checked without side
+        // effects. Deliberately not described as verifying RBAC: it exercises
+        // `list` and nothing else, so a Role missing `create` or `delete`
+        // starts cleanly here and fails at the first real recovery, with a
+        // device already down. Checking those two properly would mean creating
+        // and deleting a pod at startup, which is a worse trade than saying
+        // plainly that they are unverified.
         verifyAccess(kubernetes, config);
 
         RecoveryController controller = new RecoveryController(
@@ -83,7 +85,9 @@ public final class Main {
     private static void verifyAccess(KubernetesApi kubernetes, OperatorConfig config)
             throws KubernetesException {
         int found = kubernetes.listPods("app", config.deviceAppLabel()).size();
-        System.out.printf(Locale.ROOT, "kubernetes reachable: %d device pod(s) in %s%n",
+        System.out.printf(Locale.ROOT,
+                "kubernetes reachable: %d device pod(s) in %s (list verified; create and"
+                        + " delete are not exercised until a real failure)%n",
                 found, config.namespace());
     }
 
@@ -121,6 +125,7 @@ public final class Main {
                 recoveries failed  : %d
                 malformed events   : %d
                 ignored events     : %d
+                commit failures    : %d
                 publish failures   : %d
                 %n""",
                 controller.replacedCount(),
@@ -129,11 +134,12 @@ public final class Main {
                 controller.failedCount(),
                 consumer.malformedCount(),
                 consumer.ignoredCount(),
+                consumer.commitFailureCount(),
                 publisher.publishFailures());
 
         controller.ledger().values().forEach(recovery ->
                 System.out.printf(Locale.ROOT, "  %s -> %s (%s, %d ms)%n",
-                        recovery.deviceId(), recovery.replacementPod(),
+                        recovery.deviceId(), recovery.pod(),
                         recovery.outcome(), recovery.durationMillis()));
 
         System.out.println("These figures are a demonstration. Only runs recorded under "

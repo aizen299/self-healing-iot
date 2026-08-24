@@ -33,7 +33,7 @@ public final class RecoveryController {
     private final Clock clock;
 
     /**
-     * What this operator has done, by device.
+     * Every recovery this operator has performed, keyed by recovery id.
      *
      * <p>Explicit state, as the design requires — but deliberately *not* what
      * makes recovery idempotent. That guarantee is the deterministic
@@ -41,8 +41,23 @@ public final class RecoveryController {
      * survives this process dying; a ledger alone would forget. This exists so
      * the operator can report what it did, and to save an API round trip on a
      * duplicate it happens to still remember.
+     *
+     * <p>By recovery id rather than by device, so a device recovered more than
+     * once keeps both. Keyed by device it silently dropped all but the latest,
+     * which is exactly the case repeated-failure experiments produce most of.
      */
     private final Map<String, Recovery> ledger = new ConcurrentHashMap<>();
+
+    /**
+     * The last recovery per device that actually created a replacement.
+     *
+     * <p>Only replacements, which is the whole point: keyed on the last
+     * *decision* it is overwritten by the NOT_NEEDED that the guard below
+     * produces, so the third failure of a startup storm finds no replacement
+     * recorded and creates another pod. The guard has to remember what is
+     * running, not what was last concluded.
+     */
+    private final Map<String, Recovery> lastReplacement = new ConcurrentHashMap<>();
 
     private final LongAdder replaced = new LongAdder();
     private final LongAdder duplicates = new LongAdder();
@@ -70,10 +85,10 @@ public final class RecoveryController {
         String recoveryId = RecoveryId.of(deviceId, event.atMillis());
         String podName = RecoveryId.replacementPodName(deviceId, recoveryId);
 
-        // Cheap duplicate check. The authoritative one is the create below.
-        Recovery known = ledger.get(deviceId);
-        if (known != null && known.recoveryId().equals(recoveryId)
-                && known.outcome() != RecoveryOutcome.FAILED) {
+        // Cheap duplicate check, on this exact recovery. The authoritative one
+        // is the create below.
+        Recovery known = ledger.get(recoveryId);
+        if (known != null && known.outcome() != RecoveryOutcome.FAILED) {
             duplicates.increment();
             // Said out loud. Returning silently makes a duplicate that was
             // correctly declined look exactly like an event that never
@@ -81,8 +96,8 @@ public final class RecoveryController {
             // broken — and the difference matters most when someone is
             // checking whether recovery is idempotent.
             System.out.println("ignoring a repeat of recovery " + recoveryId + " for "
-                    + deviceId + "; already handled as " + known.replacementPod());
-            return record(new Recovery(deviceId, recoveryId, known.replacementPod(),
+                    + deviceId + "; already handled as " + known.pod());
+            return record(new Recovery(deviceId, recoveryId, known.pod(),
                     event.atMillis(), now(), RecoveryOutcome.ALREADY_RECOVERED));
         }
 
@@ -128,13 +143,37 @@ public final class RecoveryController {
                     event.atMillis(), now(), RecoveryOutcome.ALREADY_RECOVERED));
         }
 
+        // Already answered by a replacement this operator made *after* the
+        // failure was detected.
+        //
+        // This is the storm guard, and it is deliberately separate from the
+        // liveness check below. A replacement waits for the broker and then
+        // boots a JVM, and the gateway keeps declaring the device offline
+        // throughout — genuinely distinct failure events with distinct
+        // recovery ids, which the deterministic-name guard cannot catch. Any
+        // failure detected before the current replacement was created is a
+        // report of the outage that replacement already answers.
+        //
+        // Checked before replaceLiveDevices is consulted, because that flag
+        // exists to say "a Running pod does not block replacement" — not
+        // "ignore a recovery already in progress". Conflating the two turns
+        // the flag into a churn loop where every event kills the pod that was
+        // about to end the outage.
+        Recovery inFlight = lastReplacement.get(deviceId);
+        if (inFlight != null && inFlight.actedAtMillis() >= event.atMillis()
+                && forThisDevice.stream()
+                        .anyMatch(pod -> pod.name().equals(inFlight.pod()) && pod.isAlive())) {
+            notNeeded.increment();
+            System.out.println("no recovery needed for " + deviceId + ": " + inFlight.pod()
+                    + " already replaces it and is " + inFlight.recoveryId());
+            return record(new Recovery(deviceId, recoveryId, inFlight.pod(),
+                    event.atMillis(), now(), RecoveryOutcome.NOT_NEEDED));
+        }
+
         // A failure event says what the gateway saw when it fired, not what is
         // true now. A device that came back on its own between the event being
         // written and this operator reading it is healthy, and replacing it
         // would kill a working device to cure a fault that has passed.
-        //
-        // Only pods that are not themselves replacements for *this* failure
-        // count — the check above already ruled those out.
         Optional<PodRef> alive = forThisDevice.stream().filter(PodRef::isAlive).findFirst();
         if (alive.isPresent() && !config.replaceLiveDevices()) {
             notNeeded.increment();
@@ -150,13 +189,17 @@ public final class RecoveryController {
         String manifest = replacements.build(source, deviceId,
                 DeviceIndex.offsetFor(deviceId, config.deviceIdPrefix()), recoveryId, replaced0);
 
-        // The stopped pod still holds its name and would keep showing up as
-        // this device in `kubectl get pods`. Removed before the replacement so
-        // the fleet never appears to have two of one device.
-        for (PodRef stale : forThisDevice) {
-            kubernetes.deletePod(stale.name(), true);
-        }
-
+        // Create first, delete after.
+        //
+        // The other order is destructive: a create that fails once the stale
+        // pods are gone leaves nothing to clone on the retry, and when the
+        // whole fleet is down — which is when recovery matters most — there is
+        // no sibling either, so the device becomes permanently unrecoverable
+        // by the operator's own hand. This way a failed create leaves the
+        // cluster exactly as it found it.
+        //
+        // Nothing collides: the replacement's name is derived from the
+        // recovery id, so it never clashes with the pod it replaces.
         boolean created = kubernetes.createPod(manifest);
         if (created) {
             replaced.increment();
@@ -166,6 +209,12 @@ public final class RecoveryController {
             duplicates.increment();
             System.out.println("recovery " + recoveryId + " for " + deviceId
                     + " already existed; nothing created");
+        }
+
+        // Only now. The stopped pod still holds its name and would otherwise
+        // keep showing up as this device in `kubectl get pods`.
+        for (PodRef stale : forThisDevice) {
+            kubernetes.deletePod(stale.name(), true);
         }
         return record(new Recovery(deviceId, recoveryId, podName, event.atMillis(), now(),
                 created ? RecoveryOutcome.REPLACED : RecoveryOutcome.ALREADY_RECOVERED));
@@ -177,23 +226,23 @@ public final class RecoveryController {
      * <p>The failed device's own pod first: a crashed pod with {@code
      * restartPolicy: Never} still exists in Failed phase, and it is the exact
      * shape the replacement should have. If it was force-deleted there is
-     * nothing left to read, so any healthy sibling does — every device pod in
+     * nothing left of it, so any healthy sibling does — every device pod in
      * the fleet is the same but for its offset and label.
+     *
+     * <p>No API call: the list that found these pods already carried their
+     * manifests.
      */
     private String sourceManifest(List<PodRef> forThisDevice, List<PodRef> fleet,
             String deviceId) throws KubernetesException {
         for (PodRef own : forThisDevice) {
-            String manifest = kubernetes.readPod(own.name());
-            if (manifest != null) {
-                return manifest;
+            if (own.manifest() != null) {
+                return own.manifest();
             }
         }
         for (PodRef sibling : fleet) {
-            if (!deviceId.equals(sibling.label("device-id")) && sibling.isAlive()) {
-                String manifest = kubernetes.readPod(sibling.name());
-                if (manifest != null) {
-                    return manifest;
-                }
+            if (!deviceId.equals(sibling.label("device-id")) && sibling.isAlive()
+                    && sibling.manifest() != null) {
+                return sibling.manifest();
             }
         }
         // Reported rather than guessed at. Inventing a pod spec here would
@@ -205,7 +254,10 @@ public final class RecoveryController {
     }
 
     private Recovery record(Recovery recovery) {
-        ledger.put(recovery.deviceId(), recovery);
+        ledger.put(recovery.recoveryId(), recovery);
+        if (recovery.outcome() == RecoveryOutcome.REPLACED) {
+            lastReplacement.put(recovery.deviceId(), recovery);
+        }
         return recovery;
     }
 
@@ -213,7 +265,7 @@ public final class RecoveryController {
         return clock.millis();
     }
 
-    /** Everything this operator has done, for the run summary. */
+    /** Every recovery this operator has performed, keyed by recovery id. */
     public Map<String, Recovery> ledger() {
         return Map.copyOf(ledger);
     }

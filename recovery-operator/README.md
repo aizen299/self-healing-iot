@@ -52,7 +52,8 @@ The guarantee is a property of cluster state, which outlives the process.
 | The same event after an operator restart | `ALREADY_RECOVERED`, from the cluster, not from memory |
 | A *different* failure of the same device | A new recovery — a replacement that dies must be replaced |
 | A device that came back on its own | `NOT_NEEDED`; a stale event must not kill a working device |
-| A new failure while a replacement is still starting | `NOT_NEEDED`; otherwise every one adds another pod |
+| A new failure while a replacement is still starting | `NOT_NEEDED`; otherwise every one adds another pod. Holds with `OPERATOR_REPLACE_LIVE_DEVICES=true` as well — that flag means "a Running pod does not block replacement", not "ignore a recovery in progress" |
+| A pod whose node stopped reporting (`Unknown`) | Replaced. Treating it as present is how a dead node leaves the fleet permanently short |
 | The cluster refuses | `FAILED`, counted, and the next event still handled |
 
 ## The replacement is cloned
@@ -76,8 +77,8 @@ reports and stops rather than inventing a spec.
 
 They start at the same instant and the gateway's contains this one, so
 **they must never be added**. MTTR is the gateway's number. The operator's is
-`null` for any outcome that replaced nothing — for those the subtraction is
-arithmetic, not a measurement.
+`null` whenever it would not be a measurement: an outcome that replaced
+nothing, or a negative result, which means the two pods' clocks disagree.
 
 ## Configuration
 
@@ -125,8 +126,18 @@ than a failure (ADR-006), and no recovery follows.
 - **`DEVICE_OFFLINE` only.** `device.failures` should carry nothing else, but
   this process deletes pods, and "the topic is supposed to" is not a safe
   basis for that.
-- **Namespaced RBAC, four verbs.** No `watch`: the trigger is a topic, so the
-  operator never observes the cluster continuously.
-- **A startup call to the API server**, so a missing RBAC rule is a
-  crash-loop visible in `kubectl get pods` rather than a recovery that
-  silently never happens.
+- **Create before delete.** The other order is destructive: a create that
+  fails once the stale pods are gone leaves nothing to clone, and with the
+  whole fleet down there is no sibling either, so the device becomes
+  unrecoverable by the operator's own hand.
+- **Namespaced RBAC, three verbs** — `list`, `create`, `delete`. No `watch`,
+  because the trigger is a topic; no `get`, because the list response already
+  carries every pod's spec, which is also what removes a second API call per
+  recovery.
+- **A startup call to the API server**, so a missing `list` permission is a
+  crash-loop visible in `kubectl get pods`. It verifies `list` and nothing
+  else — `create` and `delete` are not exercised until a real failure, and
+  the log says so rather than implying more.
+- **A commit failure is not fatal.** Letting it escape the poll loop kills
+  the process; what an uncommitted offset actually causes is redelivery,
+  which is safe here by construction.

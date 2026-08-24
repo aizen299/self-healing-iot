@@ -12,15 +12,20 @@ import java.util.List;
  *
  * <p>Deliberately narrow. No watches, no informers, no custom resources — the
  * trigger is a Kafka topic (ADR-011), so this never needs to observe the
- * cluster continuously, only to look and act when an event arrives.
+ * cluster continuously, only to look and act when an event arrives. Three
+ * verbs, which is also exactly what the Role grants.
  */
 public interface KubernetesApi {
 
-    /** Pods in the operator's namespace matching {@code key=value}. */
+    /**
+     * Pods in the operator's namespace matching {@code key=value}, each
+     * carrying its own manifest.
+     *
+     * <p>One call, not one plus a read per pod: the PodList the API server
+     * returns already contains every pod's full spec, so fetching one again
+     * to clone it was a second round trip for data already in hand.
+     */
     List<PodRef> listPods(String labelKey, String labelValue) throws KubernetesException;
-
-    /** One pod's full manifest as JSON, or empty when it does not exist. */
-    String readPod(String name) throws KubernetesException;
 
     /**
      * Creates a pod from a JSON manifest.

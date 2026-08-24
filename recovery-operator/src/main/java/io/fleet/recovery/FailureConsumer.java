@@ -10,6 +10,9 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.CommitFailedException;
+import org.apache.kafka.common.errors.RebalanceInProgressException;
+import org.apache.kafka.common.errors.RetriableException;
 import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -43,6 +46,7 @@ public final class FailureConsumer implements AutoCloseable {
 
     private final LongAdder malformed = new LongAdder();
     private final LongAdder ignored = new LongAdder();
+    private final LongAdder commitFailures = new LongAdder();
 
     private volatile boolean running = true;
 
@@ -90,7 +94,7 @@ public final class FailureConsumer implements AutoCloseable {
                     handle(record);
                 }
                 if (!records.isEmpty()) {
-                    consumer.commitSync();
+                    commit();
                 }
             }
         } catch (WakeupException e) {
@@ -100,6 +104,32 @@ public final class FailureConsumer implements AutoCloseable {
             }
         } finally {
             consumer.close();
+        }
+    }
+
+    /**
+     * Commits, and survives failing to.
+     *
+     * <p>Letting a commit exception escape kills the poll loop and, with it,
+     * the process — a rebalance throws {@code CommitFailedException} and a
+     * broker blip throws a retriable one, neither of which is a reason to stop
+     * recovering devices. What an uncommitted offset actually causes is
+     * redelivery, which is safe here by construction: the replacement's name
+     * is derived from the failure (ADR-011), so the second attempt creates
+     * nothing.
+     */
+    private void commit() {
+        try {
+            consumer.commitSync();
+        } catch (RebalanceInProgressException | RetriableException e) {
+            commitFailures.increment();
+            System.err.println("offset commit failed, continuing; these events will be"
+                    + " redelivered and are idempotent: " + e.getMessage());
+        } catch (CommitFailedException e) {
+            commitFailures.increment();
+            System.err.println("offset commit rejected — the group rebalanced while this"
+                    + " batch was being handled; the events will be redelivered: "
+                    + e.getMessage());
         }
     }
 
@@ -144,6 +174,11 @@ public final class FailureConsumer implements AutoCloseable {
 
     public long ignoredCount() {
         return ignored.sum();
+    }
+
+    /** Commits that failed and were tolerated; each one means a redelivery. */
+    public long commitFailureCount() {
+        return commitFailures.sum();
     }
 
     @Override
