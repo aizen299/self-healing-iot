@@ -35,6 +35,8 @@ and detection is unaffected.
 | Fixed binary serde | The aggregate is persisted to a changelog and restored after a restart, so the format is durable state — changing it is a migration, not a refactor |
 | Malformed records dropped and counted | One bad producer must not stop the fleet's statistics, and an uncaught exception takes the stream thread down with it |
 | Keyed by device id | Puts a device's readings on one partition, in order, which the windowing depends on |
+| `suppress(untilWindowCloses)` | Without it the aggregate is forwarded on every input record, so `telemetry.processed` carries a changelog of partial windows at the input rate rather than one summary per window |
+| One parse per record | The first version validated in a `flatMapValues` and parsed again in the aggregator, decoding every record twice on the topology's only hot path |
 
 ## Configuration
 

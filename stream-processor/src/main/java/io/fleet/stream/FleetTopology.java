@@ -14,6 +14,8 @@ import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Grouped;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Produced;
+import org.apache.kafka.streams.kstream.Suppressed;
+import org.apache.kafka.streams.kstream.Suppressed.BufferConfig;
 import org.apache.kafka.streams.kstream.TimeWindows;
 import org.apache.kafka.streams.kstream.Windowed;
 
@@ -62,17 +64,22 @@ public final class FleetTopology {
 
         builder.stream(KafkaTopics.TELEMETRY_RAW,
                         Consumed.with(Serdes.String(), Serdes.ByteArray()))
-                // A record that will not parse is dropped and counted, never
-                // fatal. One bad producer must not stop the fleet's statistics
-                // being computed — and an uncaught exception here would take
-                // the whole stream thread down.
-                .flatMapValues(this::parseOrDrop)
                 .groupByKey(Grouped.with(Serdes.String(), Serdes.ByteArray()))
                 .windowedBy(TimeWindows.ofSizeAndGrace(windowSize, grace))
+                // Parsed once, here. The previous shape validated in a
+                // flatMapValues and parsed again in the aggregator, so every
+                // record on the topology's only hot path was decoded twice —
+                // and Phase 8 measures this throughput.
                 .aggregate(
                         WindowSummary::empty,
-                        (deviceId, raw, summary) -> summary.add(decode(parser, raw)),
+                        (deviceId, raw, summary) -> accumulate(parser, summary, raw),
                         Materialized.with(Serdes.String(), new WindowSummarySerde()))
+                // One record per window instead of one per input record.
+                // Without this the topic carries a changelog of partial
+                // aggregates at the input rate, which is neither what the
+                // README promises nor of any use to a consumer that wants a
+                // summary.
+                .suppress(Suppressed.untilWindowCloses(BufferConfig.unbounded()))
                 .toStream()
                 .map((Windowed<String> window, WindowSummary summary) ->
                         new org.apache.kafka.streams.KeyValue<>(
@@ -84,30 +91,20 @@ public final class FleetTopology {
     }
 
     /**
-     * Returns the record if it parses, or nothing if it does not.
+     * Folds one record into the running aggregate, skipping what will not parse.
      *
-     * <p>{@code flatMapValues} with an empty list is how a Streams topology
-     * drops a record without failing the stream; returning null would be a
-     * different thing entirely and would reach the aggregator.
+     * <p>A malformed record leaves the aggregate untouched and is counted.
+     * Throwing here would take the stream thread down with it, so one bad
+     * producer would stop the whole fleet's statistics being computed.
      */
-    private Iterable<byte[]> parseOrDrop(byte[] raw) {
+    private WindowSummary accumulate(TelemetryParser parser, WindowSummary summary, byte[] raw) {
         try {
-            new TelemetryParser().parse(raw, 0, raw.length);
-            return java.util.List.of(raw);
+            return summary.add(parser.parse(raw, 0, raw.length));
         } catch (MalformedPayloadException e) {
             malformed.increment();
             System.err.println("dropped a malformed record from telemetry.raw: "
                     + e.getMessage());
-            return java.util.List.of();
-        }
-    }
-
-    private static Telemetry decode(TelemetryParser parser, byte[] raw) {
-        try {
-            return parser.parse(raw, 0, raw.length);
-        } catch (MalformedPayloadException e) {
-            // Unreachable: parseOrDrop already rejected anything unparseable.
-            throw new IllegalStateException("a record passed the filter and then failed", e);
+            return summary;
         }
     }
 
@@ -121,15 +118,23 @@ public final class FleetTopology {
             generator.writeNumberField("windowEnd", window.window().end());
             generator.writeNumberField("readings", summary.count());
             generator.writeNumberField("meanTemperature", summary.meanTemperature());
-            generator.writeNumberField("maxVibration", summary.maxVibration());
-            generator.writeNumberField("minBattery", summary.minBattery());
+            // Null rather than the sentinels an empty aggregate carries.
+            // Infinity is not valid JSON, and a window that saw only malformed
+            // records reaches here with count zero.
+            if (summary.count() == 0L) {
+                generator.writeNullField("maxVibration");
+                generator.writeNullField("minBattery");
+            } else {
+                generator.writeNumberField("maxVibration", summary.maxVibration());
+                generator.writeNumberField("minBattery", summary.minBattery());
+            }
             generator.writeNumberField("degradedReadings", summary.degraded());
             generator.writeNumberField("criticalReadings", summary.critical());
             generator.writeEndObject();
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        return out.toString(StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8);
+        return out.toByteArray();
     }
 
     public long malformedCount() {

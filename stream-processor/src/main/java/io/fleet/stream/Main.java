@@ -44,11 +44,29 @@ public final class Main {
             stopped.countDown();
         }, "stream-shutdown"));
 
+        // Written where a container healthcheck can read it. Kafka Streams
+        // exposes no endpoint, so without this a crash-looping topology is
+        // indistinguishable from a quiet one.
+        streams.setStateListener((newState, oldState) -> publishState(newState.name()));
+        publishState("STARTING");
+
         streams.start();
         System.out.println("topology running; reading telemetry.raw");
         stopped.await();
 
         System.out.println("malformed records dropped: " + topology.malformedCount());
+    }
+
+    private static void publishState(String state) {
+        try {
+            java.nio.file.Path file = java.nio.file.Path.of("/app/data/streams-state");
+            java.nio.file.Files.createDirectories(file.getParent());
+            java.nio.file.Files.writeString(file, state);
+        } catch (java.io.IOException e) {
+            // Best effort. Losing the health marker must not stop the topology
+            // — an unreported healthy stream beats a dead one.
+            System.err.println("could not publish stream state: " + e.getMessage());
+        }
     }
 
     private static Properties properties(StreamConfig config) {

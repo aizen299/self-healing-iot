@@ -31,6 +31,20 @@ The stream processor is a separate service for the same reason. It derives
 fleet statistics; it cannot slow down or break detection, because detection
 does not wait for it.
 
+### Forwarding never runs on the caller's thread
+
+Records are handed to a dedicated thread through a bounded queue, and the
+queue drops rather than blocks when full.
+
+This is what makes the claim below actually true rather than merely
+intended. `KafkaProducer.send` blocks for up to `max.block.ms` when
+metadata is unavailable or the record buffer is full, and the caller is the
+MQTT callback thread — the thread that records heartbeats. Producing
+directly from it means an unreachable broker stops heartbeats being
+recorded, the monitor sees devices go quiet, and Kafka being down is
+reported as a fleet-wide device failure. The first version of this phase
+did exactly that.
+
 ### Forwarding is optional and never fatal
 
 `GATEWAY_KAFKA_ENABLED` defaults to **false**. The gateway ingests,
@@ -93,7 +107,9 @@ an uncaught exception in a topology takes the stream thread down with it.
 
 ## Consequences
 - Positive: the failure-detection path is unchanged by this phase. Kafka
-  can be down, misconfigured, or absent and detection still works.
+  can be down, misconfigured, or absent and detection still works — which
+  required decoupling the producer from the MQTT callback thread, and is
+  covered by a test asserting the caller is never blocked.
 - Positive: `telemetry.raw` is byte-identical to what went over MQTT, so
   the wire format has exactly one encoder in the whole system.
 - Positive: Phase 9 can subscribe to `device.failures` alone.

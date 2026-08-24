@@ -125,6 +125,29 @@ class FleetTopologyTest {
     }
 
     @Test
+    @DisplayName("a window emits once, not once per input record")
+    void windowsAreSuppressedUntilTheyClose() {
+        // Without suppression the aggregate is forwarded on every update, so
+        // telemetry.processed carries a changelog of partial windows at the
+        // input rate — as many records as came in, each superseding the last.
+        for (int i = 0; i < 6; i++) {
+            publish("device-001", T0.plusMillis(i * 100L), 20.0d, 1.0d, 90.0d, "OK");
+        }
+        assertTrue(output.isEmpty(), "nothing should be emitted while the window is open");
+
+        // Advancing past the window closes it.
+        publish("device-001", T0.plus(WINDOW).plusSeconds(1), 20.0d, 1.0d, 90.0d, "OK");
+
+        List<String> emitted = output.readValuesToList().stream()
+                .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
+                .toList();
+
+        assertEquals(1, emitted.size(),
+                "one closed window should produce exactly one record: " + emitted);
+        assertTrue(emitted.get(0).contains("\"readings\":6"), emitted.get(0));
+    }
+
+    @Test
     @DisplayName("devices are aggregated independently")
     void devicesDoNotContaminateEachOther() {
         publish("device-001", T0, 10.0d, 1.0d, 90.0d, "OK");

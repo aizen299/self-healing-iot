@@ -5,6 +5,8 @@ import io.fleet.common.DeviceEventType;
 import io.fleet.common.DeviceHealth;
 import io.fleet.common.StoreException;
 import io.fleet.common.TelemetryStore;
+import io.fleet.gateway.kafka.NoOpForwarder;
+import io.fleet.gateway.kafka.TelemetryForwarder;
 
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -30,7 +32,7 @@ public final class HealthMonitor implements AutoCloseable {
     private final GatewayMetrics metrics;
     private final EventPublisher events;
     private final TelemetryStore store;
-    private final io.fleet.gateway.kafka.TelemetryForwarder forwarder;
+    private final TelemetryForwarder forwarder;
     private final long sweepIntervalMillis;
     private final ScheduledExecutorService scheduler;
 
@@ -52,7 +54,7 @@ public final class HealthMonitor implements AutoCloseable {
             TelemetryStore store,
             long sweepIntervalMillis) {
         this(registry, policy, metrics, events, store,
-                new io.fleet.gateway.kafka.NoOpForwarder(), sweepIntervalMillis);
+                new NoOpForwarder(), sweepIntervalMillis);
     }
 
     public HealthMonitor(
@@ -61,7 +63,7 @@ public final class HealthMonitor implements AutoCloseable {
             GatewayMetrics metrics,
             EventPublisher events,
             TelemetryStore store,
-            io.fleet.gateway.kafka.TelemetryForwarder forwarder,
+            TelemetryForwarder forwarder,
             long sweepIntervalMillis) {
 
         this.forwarder = forwarder;

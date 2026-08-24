@@ -18,13 +18,16 @@ import java.util.Map;
  * @param clientId         producer client id
  * @param lingerMs         how long the producer batches before sending
  * @param requestTimeoutMs ceiling on a produce request
+ * @param queueCapacity    records buffered before the caller's thread starts
+ *                         dropping rather than waiting on Kafka
  */
 public record ForwarderConfig(
         boolean enabled,
         String bootstrapServers,
         String clientId,
         int lingerMs,
-        int requestTimeoutMs) {
+        int requestTimeoutMs,
+        int queueCapacity) {
 
     public ForwarderConfig {
         if (enabled && (bootstrapServers == null || bootstrapServers.isBlank())) {
@@ -40,6 +43,24 @@ public record ForwarderConfig(
         if (requestTimeoutMs < 1) {
             throw new ConfigurationException(
                     "KAFKA_REQUEST_TIMEOUT_MS must be >= 1, got " + requestTimeoutMs);
+        }
+        if (queueCapacity < 1) {
+            throw new ConfigurationException(
+                    "GATEWAY_KAFKA_QUEUE_CAPACITY must be >= 1, got " + queueCapacity);
+        }
+        // Kafka's own rule: delivery.timeout.ms must be at least
+        // linger.ms + request.timeout.ms. The forwarder derives delivery
+        // timeout from the request timeout alone, so a large linger with a
+        // small request timeout produces a config the KafkaProducer
+        // constructor rejects — and since an unopenable forwarder falls back
+        // to the null object, the result would be a valid-looking setting that
+        // silently forwards nothing.
+        long deliveryTimeout = Math.max(requestTimeoutMs * 2L, requestTimeoutMs + 1L);
+        if (deliveryTimeout < (long) lingerMs + requestTimeoutMs) {
+            throw new ConfigurationException(
+                    "KAFKA_LINGER_MS (" + lingerMs + ") is too large for"
+                            + " KAFKA_REQUEST_TIMEOUT_MS (" + requestTimeoutMs
+                            + "); Kafka requires delivery.timeout.ms >= linger + request timeout");
         }
     }
 
@@ -57,6 +78,11 @@ public record ForwarderConfig(
                 // reduction in requests; failures are rare enough that the
                 // same delay costs nothing noticeable.
                 Env.intValue(env, "KAFKA_LINGER_MS", 20),
-                Env.intValue(env, "KAFKA_REQUEST_TIMEOUT_MS", 10_000));
+                Env.intValue(env, "KAFKA_REQUEST_TIMEOUT_MS", 10_000),
+                // Roughly ten seconds of a 50-device fleet at one reading per
+                // second. Large enough to ride out a broker blip, small enough
+                // that a sustained outage drops records rather than growing
+                // without bound inside a memory-limited container.
+                Env.intValue(env, "GATEWAY_KAFKA_QUEUE_CAPACITY", 1_000));
     }
 }
