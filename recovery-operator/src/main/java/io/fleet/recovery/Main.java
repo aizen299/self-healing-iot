@@ -1,0 +1,145 @@
+package io.fleet.recovery;
+
+import io.fleet.recovery.k8s.HttpKubernetesApi;
+import io.fleet.recovery.k8s.KubernetesApi;
+import io.fleet.recovery.k8s.KubernetesException;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Runs the recovery operator until interrupted, or for a fixed duration.
+ *
+ * <p>Consumes {@code device.failures}, provisions a replacement pod for each
+ * failed device, and announces the result on {@code device.recovery}. This is
+ * the last arrow in the loop the project is built around: {@code device →
+ * telemetry → monitoring → failure detected → recovery event → controller →
+ * replacement workload → healthy fleet restored}.
+ */
+public final class Main {
+
+    private static final long SHUTDOWN_GRACE_SECONDS = 15L;
+
+    public static void main(String[] args) throws Exception {
+        OperatorConfig config = OperatorConfig.fromEnv();
+        printHeader(config);
+
+        KubernetesApi kubernetes = HttpKubernetesApi.inCluster(
+                config.namespace(), Duration.ofSeconds(config.apiTimeoutSeconds()));
+
+        // Fail fast, and fail here. The operator's whole job needs API access,
+        // and finding out at the first failure — possibly hours in, with a
+        // device already dead — turns a misconfigured RBAC rule into a missed
+        // recovery. One list call at startup makes it a crash-loop instead,
+        // which is visible in `kubectl get pods`.
+        verifyAccess(kubernetes, config);
+
+        RecoveryController controller = new RecoveryController(
+                kubernetes, new ReplacementFactory(), config, Clock.systemUTC());
+
+        CountDownLatch finished = new CountDownLatch(1);
+
+        try (RecoveryPublisher publisher = new RecoveryPublisher(config);
+             FailureConsumer consumer = new FailureConsumer(config, controller, publisher)) {
+
+            Thread poller = new Thread(consumer::run, "recovery-consumer");
+            poller.start();
+
+            // The hook stops the loop and then waits for main to finish, as
+            // the gateway's does. Counting down and returning would let the
+            // JVM carry on exiting and kill main part-way through its last
+            // recovery — and since this process runs until interrupted, SIGTERM
+            // is its normal exit path rather than an edge case.
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                consumer.stop();
+                try {
+                    finished.await(SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }, "operator-shutdown"));
+
+            if (config.runDurationSeconds() > 0) {
+                poller.join(TimeUnit.SECONDS.toMillis(config.runDurationSeconds()));
+                consumer.stop();
+                poller.join(TimeUnit.SECONDS.toMillis(SHUTDOWN_GRACE_SECONDS));
+            } else {
+                // Until interrupted means until interrupted. Joining with the
+                // shutdown grace here instead would have the operator print its
+                // summary and exit fifteen seconds after starting, with the
+                // fleet unwatched and the pod reported Completed.
+                poller.join();
+            }
+
+            printSummary(controller, consumer, publisher);
+        } finally {
+            finished.countDown();
+        }
+    }
+
+    private static void verifyAccess(KubernetesApi kubernetes, OperatorConfig config)
+            throws KubernetesException {
+        int found = kubernetes.listPods("app", config.deviceAppLabel()).size();
+        System.out.printf(Locale.ROOT, "kubernetes reachable: %d device pod(s) in %s%n",
+                found, config.namespace());
+    }
+
+    private static void printHeader(OperatorConfig config) {
+        System.out.printf(Locale.ROOT, """
+                === recovery operator (Phase 9) ===
+                kafka             : %s
+                consumer group    : %s
+                namespace         : %s
+                device app label  : %s
+                device id prefix  : %s
+                replace live pods : %s
+                run duration      : %s
+                jvm               : %s %s
+                %n""",
+                config.bootstrapServers(),
+                config.consumerGroupId(),
+                config.namespace(),
+                config.deviceAppLabel(),
+                config.deviceIdPrefix(),
+                config.replaceLiveDevices(),
+                config.runDurationSeconds() == 0
+                        ? "until interrupted" : config.runDurationSeconds() + " s",
+                System.getProperty("java.vm.name"),
+                System.getProperty("java.version"));
+    }
+
+    private static void printSummary(RecoveryController controller, FailureConsumer consumer,
+            RecoveryPublisher publisher) {
+        System.out.printf(Locale.ROOT, """
+                %n=== operator summary ===
+                devices replaced   : %d
+                already recovered  : %d
+                recovery not needed: %d
+                recoveries failed  : %d
+                malformed events   : %d
+                ignored events     : %d
+                publish failures   : %d
+                %n""",
+                controller.replacedCount(),
+                controller.duplicateCount(),
+                controller.notNeededCount(),
+                controller.failedCount(),
+                consumer.malformedCount(),
+                consumer.ignoredCount(),
+                publisher.publishFailures());
+
+        controller.ledger().values().forEach(recovery ->
+                System.out.printf(Locale.ROOT, "  %s -> %s (%s, %d ms)%n",
+                        recovery.deviceId(), recovery.replacementPod(),
+                        recovery.outcome(), recovery.durationMillis()));
+
+        System.out.println("These figures are a demonstration. Only runs recorded under "
+                + "experiments/results/ count as results.");
+    }
+
+    private Main() {
+    }
+}

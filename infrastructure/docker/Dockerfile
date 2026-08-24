@@ -23,6 +23,7 @@ COPY common/pom.xml common/
 COPY edge-device/pom.xml edge-device/
 COPY gateway/pom.xml gateway/
 COPY stream-processor/pom.xml stream-processor/
+COPY recovery-operator/pom.xml recovery-operator/
 COPY tests/integration/pom.xml tests/integration/
 RUN --mount=type=cache,target=/root/.m2 mvn -B -q dependency:go-offline
 
@@ -32,6 +33,7 @@ COPY common/src common/src
 COPY edge-device/src edge-device/src
 COPY gateway/src gateway/src
 COPY stream-processor/src stream-processor/src
+COPY recovery-operator/src recovery-operator/src
 # Tests are skipped here deliberately: the suite needs a broker, and an image
 # build is not the place to discover that. CI runs them against a real one.
 RUN --mount=type=cache,target=/root/.m2 mvn -B -q package -DskipTests
@@ -100,3 +102,12 @@ COPY --from=build --chown=fleet:fleet /src/stream-processor/target/stream-proces
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75"
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/stream-processor.jar \"$@\"", "--"]
+
+# ---- recovery operator -------------------------------------------------
+FROM runtime-base AS recovery-operator
+COPY --from=build --chown=fleet:fleet /src/recovery-operator/target/dependency/ ./dependency/
+COPY --from=build --chown=fleet:fleet /src/recovery-operator/target/recovery-operator-*.jar ./recovery-operator.jar
+
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75"
+
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/recovery-operator.jar \"$@\"", "--"]

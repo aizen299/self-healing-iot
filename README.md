@@ -76,11 +76,9 @@ and current implementation status.
 
 ## Status
 
-**Phases 1–8 complete — a fleet on Kubernetes whose failures are detected,
-recorded, and streamed, and stay unrecovered on purpose.** `common/`,
-`edge-device/`, `gateway/`, and `stream-processor/` are implemented,
-tested, and runnable; 157 tests pass. `recovery-operator/` is still
-scaffolding.
+**Phases 1–9 complete — a self-healing fleet.** A device that dies is
+detected, replaced, and back online without anyone touching it. Every
+module is implemented, tested, and runnable; 181 tests pass.
 
 Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
 database need a server, and the phase that supplies servers came after both
@@ -126,8 +124,16 @@ you would deploy a service and is exactly the point: a Deployment would
 restart a crashed device in about a second, and the MTTR this project
 reports would be a measurement of the kubelet's restart loop rather than of
 the detection-and-recovery loop that is the research subject. A device that
-dies stays dead until Phase 9's operator replaces it
+dies stays dead until the recovery operator replaces it
 ([ADR-010](docs/decisions/ADR-010-kubernetes-deployment-shape.md)).
+
+**The loop closes.** The operator consumes `device.failures`, clones a
+replacement pod for the dead device, and announces what it did on
+`device.recovery`. Recovery is idempotent because the replacement's name is
+derived from the failure it answers, so a redelivered event asks the API
+server to create a pod that already exists and is refused — a guarantee that
+survives the operator crashing, which an in-memory ledger would not
+([ADR-011](docs/decisions/ADR-011-recovery-operator-shape.md)).
 
 ## Development phases
 
@@ -143,7 +149,7 @@ working, tested demonstration. This numbering is canonical and matches
 - [x] Phase 6 — Kafka streaming
 - [x] Phase 7 — Containerization (Docker) — *taken before Phase 6, see ADR-008*
 - [x] Phase 8 — Kubernetes deployment
-- [ ] Phase 9 — Automatic recovery (operator)
+- [x] Phase 9 — Automatic recovery (operator)
 - [ ] Phase 10 — Observability (Prometheus / Grafana)
 - [ ] Phase 11 — Chaos experiments
 - [ ] Phase 12 — CI/CD

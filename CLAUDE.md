@@ -31,13 +31,11 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phases 1–8 complete — a fleet on Kubernetes whose failures are detected,
-recorded, and streamed.** Phase 7 was taken before Phase 6 (ADR-008): Kafka
+**Phases 1–9 complete — a self-healing fleet.** A device that dies is
+detected, replaced, and back online with nobody touching it. Phase 7 was taken before Phase 6 (ADR-008): Kafka
 and a real TSDB both need a server, and containers supply them. The phase
 numbers still identify the work, but no longer its order.
-`common/`, `edge-device/`, `gateway/`, and `stream-processor/` are
-implemented and tested; `recovery-operator/` is still README-only
-scaffolding stating its target phase.
+Every module is implemented and tested.
 
 Build is **Maven** (no Gradle). The JVM is pinned to HotSpot OpenJDK 21
 by ADR-002 and enforced by `maven-enforcer-plugin` — the build fails on
@@ -222,6 +220,23 @@ MQTT topic convention: `fleet/{deviceId}/telemetry`, `/heartbeat`,
 **Recovery must be idempotent** — the same failure event arriving twice must
 never create two replacements. Track recovery state explicitly (device,
 replacement identity, recovery id).
+
+That guarantee lives in the API server, not the operator (ADR-011): the
+recovery id is SHA-256 over `deviceId@detectedAtMillis` and the replacement
+pod's name derives from it, so a redelivered event asks for a pod that
+already exists and is refused. An in-memory ledger cannot be the mechanism —
+the case that most needs it is the one where the operator just died. The
+ledger exists for reporting.
+
+The operator uses **no Kubernetes client library and no Operator SDK**: its
+trigger is a Kafka topic rather than a custom resource, and it makes four API
+calls. JDK `HttpClient` plus the Jackson streaming parser, ~300 lines. Take
+a library the moment it needs watches, informers, or CRDs.
+
+Two durations exist and **must never be added**: the operator's
+`detectionToReplacementMillis` ends when the API server accepts the pod, the
+gateway's `recoveryDurationMillis` ends when heartbeats are confirmed and
+already contains it. MTTR is the gateway's number.
 
 ## Repository layout
 

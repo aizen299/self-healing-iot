@@ -3,10 +3,10 @@
 The fleet on Kubernetes: a local [kind](https://kind.sigs.k8s.io) cluster
 running the broker, the gateway, and three devices — one device per pod.
 
-**Status:** Phase 8 complete. Broker, gateway, and a three-device fleet run
-on kind with ConfigMaps, probes, resource limits, and the labels Phase 9's
-recovery operator will select on. Kafka and the stream processor are an
-optional overlay.
+**Status:** Phase 9 complete. Broker, gateway, and a three-device fleet run
+on kind with ConfigMaps, probes, resource limits, and RBAC. Kafka and the
+stream processor are an optional overlay; the recovery operator is another,
+and with it a killed device comes back on its own.
 
 Design decisions are in
 [ADR-010](../../docs/decisions/ADR-010-kubernetes-deployment-shape.md).
@@ -63,6 +63,7 @@ Tear the whole thing down:
 | `gateway-admin` | NodePort Service, `publishNotReadyAddresses` | Keeps `/health` reachable while readiness has the gateway out of rotation |
 | `fleet-config` | ConfigMap | The tick interval and broker URL both halves must agree on |
 | `fleet-device-config` | ConfigMap | Everything identical across the device pods, so only the offset differs |
+| `recovery-operator` | Deployment + ServiceAccount + Role (optional) | The only workload that talks to the API server, and the only one that mounts a token |
 | `kafka` | StatefulSet (optional) | Kafka advertises a hostname; a Deployment's pod name changes on restart |
 
 ## The bare Pods are the point
@@ -73,7 +74,7 @@ recovery operator never gets to act, and the MTTR this project reports
 would be a measurement of the kubelet's restart loop instead of the
 detection-and-recovery loop that is the research subject.
 
-So devices are bare Pods that stay dead. Kill one:
+So devices are bare Pods that nothing in Kubernetes brings back. Kill one:
 
 ```bash
 kubectl -n fleet delete pod edge-device-002 --grace-period=0 --force
@@ -90,10 +91,26 @@ Then watch the gateway notice:
 curl -s http://127.0.0.1:18080/devices/device-002
 ```
 
-Nothing brings that pod back. That is correct until Phase 9 exists.
+Without the recovery overlay, nothing brings that pod back — and that is
+correct. With it, the operator does, in a couple of seconds:
 
-**Read this as a research instrument, not as a deployment pattern.** A
-system whose goal was uptime should let Kubernetes restart the pod.
+```bash
+./infrastructure/kubernetes/deploy.sh --recovery
+```
+
+```bash
+kubectl -n fleet get pods -l app=edge-device -L device-id,recovery-id -w
+```
+
+The replacement is named for the recovery that produced it
+(`edge-device-device-002-r-703117455b`), which is also what makes recovery
+idempotent — see
+[ADR-011](../../docs/decisions/ADR-011-recovery-operator-shape.md).
+
+**Read the bare Pods as a research instrument, not as a deployment
+pattern.** A system whose goal was uptime should let Kubernetes restart the
+pod; this one measures an application-level recovery loop, so nothing
+underneath it may quietly do the recovering first.
 
 ## Kafka
 
@@ -186,9 +203,5 @@ These figures are a demonstration, not a result. Only runs recorded under
   file in a Secret; Phase 8's objective was the deployment. The broker
   accepts anonymous connections and is reachable only inside the cluster and
   on localhost.
-- **RBAC.** Nothing deployed here talks to the Kubernetes API, so there is
-  no Role to write yet — every pod sets `automountServiceAccountToken:
-  false` instead. The operator's ServiceAccount and Role arrive with the
-  operator in Phase 9, where they can actually be exercised.
 - **Ingress, HPA, NetworkPolicy, multi-node.** None are needed by anything
   this project measures.

@@ -1,0 +1,115 @@
+# The recovery operator: the last arrow in the loop.
+#
+#   device → telemetry → monitoring → failure detected → recovery event
+#     → controller → replacement workload → healthy fleet restored
+#
+# Requires the Kafka overlay, because the failure events it consumes arrive on
+# device.failures. Applied separately from base/ for that reason:
+#
+#   ./infrastructure/kubernetes/deploy.sh --kafka --recovery
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recovery-operator
+  namespace: fleet
+  labels:
+    app: recovery-operator
+spec:
+  # One, and the number matters.
+  #
+  # Not because two would corrupt anything — recovery is idempotent by
+  # construction (ADR-011) — but because the consumer group already provides
+  # the mutual exclusion a second replica would need. device.failures has one
+  # partition, so exactly one member of the group is ever assigned it and a
+  # second pod would sit idle waiting for a rebalance. That is also why there
+  # is no leader election here: Kafka is already doing it.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: recovery-operator
+  # Recreate. Two operators overlapping during a rollout would both be in the
+  # consumer group, and the resulting rebalance pauses failure handling for
+  # longer than simply stopping one and starting the other.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: recovery-operator
+    spec:
+      # The one workload in this project that does mount a token, because it
+      # is the one that talks to the API server.
+      serviceAccountName: recovery-operator
+      automountServiceAccountToken: true
+      # Longer than the consumer's own shutdown, so an in-flight recovery
+      # finishes rather than being redelivered. Redelivery is safe, but a
+      # clean stop keeps the demonstration legible.
+      terminationGracePeriodSeconds: 45
+      # The operator's whole job needs Kafka. Without this it starts, fails to
+      # construct its producer against an unresolvable address, and — like the
+      # gateway before Phase 8's ordering fix — carries on announcing nothing.
+      initContainers:
+        - name: wait-for-kafka
+          image: apache/kafka@sha256:fbc7d7c428e3755cf36518d4976596002477e4c052d1f80b5b9eafd06d0fff2f
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fleet-kafka
+                  key: KAFKA_BOOTSTRAP_SERVERS
+          command:
+            - sh
+            - -c
+            - |
+              until /opt/kafka/bin/kafka-topics.sh \
+                  --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list >/dev/null 2>&1; do
+                echo "waiting for kafka at $KAFKA_BOOTSTRAP_SERVERS"
+                sleep 3
+              done
+              echo "kafka is serving"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+      containers:
+        - name: operator
+          image: fleet/recovery-operator:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fleet-kafka
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Must match the fleet's prefix: the operator reads a device's
+            # index back out of its id to decide which slice of the fleet a
+            # replacement runs. Same ConfigMap the devices read, so the two
+            # cannot drift.
+            - name: FLEET_DEVICE_ID_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: fleet-device-config
+                  key: FLEET_DEVICE_ID_PREFIX
+            - name: JAVA_OPTS
+              value: -XX:MaxRAMPercentage=75
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 320Mi
+          # No HTTP endpoint to probe, and adding a server to this process
+          # purely to have something to probe would be a worse trade than
+          # going without: the operator has one job, and a process that cannot
+          # reach Kafka or the API server exits rather than idling.
+          #
+          # The startup check in Main is the real gate — it lists pods once
+          # and fails loudly, so a missing RBAC rule is a crash-loop visible in
+          # `kubectl get pods` rather than a recovery that silently never
+          # happens.
