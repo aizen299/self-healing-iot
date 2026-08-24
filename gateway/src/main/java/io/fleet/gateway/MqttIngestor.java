@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import io.fleet.common.DeviceEventType;
 import io.fleet.common.FleetTopic;
+import io.fleet.common.HeartbeatParser;
+import io.fleet.common.MalformedPayloadException;
+import io.fleet.common.TelemetryParser;
 import io.fleet.common.Presence;
 import io.fleet.common.Telemetry;
 import io.fleet.common.TelemetryStore;
@@ -47,6 +50,7 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
     private final JsonFactory json = new JsonFactory();
     private final HealthPolicy policy;
     private final TelemetryStore store;
+    private final io.fleet.gateway.kafka.TelemetryForwarder forwarder;
     /**
      * Set after construction to break a genuine cycle: the monitor announces
      * transitions through this class as its EventPublisher, and this class
@@ -71,6 +75,15 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
     public MqttIngestor(
             GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
             HealthPolicy policy, TelemetryStore store, Clock clock) {
+        this(config, registry, metrics, policy, store,
+                new io.fleet.gateway.kafka.NoOpForwarder(), clock);
+    }
+
+    public MqttIngestor(
+            GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
+            HealthPolicy policy, TelemetryStore store,
+            io.fleet.gateway.kafka.TelemetryForwarder forwarder, Clock clock) {
+        this.forwarder = forwarder;
         this.config = config;
         this.registry = registry;
         this.metrics = metrics;
@@ -199,6 +212,10 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
             System.err.println("could not persist a reading from " + deviceId
                     + ": " + e.getMessage());
         }
+
+        // The exact bytes that arrived: the MQTT payload is already the wire
+        // format, so there is no second encoder that could drift from the first.
+        forwarder.forwardTelemetry(deviceId, payload, 0, payload.length);
     }
 
     private void handleHeartbeat(String topic, String deviceId, byte[] payload) {

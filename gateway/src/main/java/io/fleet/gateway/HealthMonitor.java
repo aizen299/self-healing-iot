@@ -30,6 +30,7 @@ public final class HealthMonitor implements AutoCloseable {
     private final GatewayMetrics metrics;
     private final EventPublisher events;
     private final TelemetryStore store;
+    private final io.fleet.gateway.kafka.TelemetryForwarder forwarder;
     private final long sweepIntervalMillis;
     private final ScheduledExecutorService scheduler;
 
@@ -50,7 +51,20 @@ public final class HealthMonitor implements AutoCloseable {
             EventPublisher events,
             TelemetryStore store,
             long sweepIntervalMillis) {
+        this(registry, policy, metrics, events, store,
+                new io.fleet.gateway.kafka.NoOpForwarder(), sweepIntervalMillis);
+    }
 
+    public HealthMonitor(
+            DeviceRegistry registry,
+            HealthPolicy policy,
+            GatewayMetrics metrics,
+            EventPublisher events,
+            TelemetryStore store,
+            io.fleet.gateway.kafka.TelemetryForwarder forwarder,
+            long sweepIntervalMillis) {
+
+        this.forwarder = forwarder;
         this.store = store;
         this.registry = registry;
         this.policy = policy;
@@ -140,11 +154,18 @@ public final class HealthMonitor implements AutoCloseable {
             return;
         }
         DeviceEventType type = announceable.get();
+        DeviceEventRecord record = new DeviceEventRecord(
+                transition.deviceId(), type, transition.from(), transition.to(),
+                transition.atMillis(), transition.missedHeartbeats(),
+                transition.recoveryDurationMillis());
+
+        // Forwarded before persisting, and neither can stop the other: a
+        // downstream consumer and the local history are independent copies,
+        // and losing one must not cost the other.
+        forwarder.forwardEvent(record);
+
         try {
-            store.recordEvent(new DeviceEventRecord(
-                    transition.deviceId(), type, transition.from(), transition.to(),
-                    transition.atMillis(), transition.missedHeartbeats(),
-                    transition.recoveryDurationMillis()));
+            store.recordEvent(record);
         } catch (StoreException e) {
             metrics.storeError();
             System.err.println("could not persist " + type + " for "

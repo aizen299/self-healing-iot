@@ -1,7 +1,5 @@
-package io.fleet.gateway;
+package io.fleet.common;
 
-import io.fleet.common.DeviceStatus;
-import io.fleet.common.Telemetry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

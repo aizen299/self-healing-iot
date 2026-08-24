@@ -1,10 +1,8 @@
-package io.fleet.gateway;
+package io.fleet.common;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import io.fleet.common.DeviceStatus;
-import io.fleet.common.Telemetry;
 
 import java.io.IOException;
 

@@ -10,13 +10,11 @@
     <version>0.1.0-SNAPSHOT</version>
   </parent>
 
-  <artifactId>gateway</artifactId>
-  <name>gateway</name>
+  <artifactId>stream-processor</artifactId>
+  <name>stream-processor</name>
   <description>
-    MQTT-facing gateway: ingests and validates device telemetry, tracks
-    per-device state, and serves a health API. Two runtime dependencies —
-    the Paho MQTT client and Jackson's streaming parser — and the JDK's own
-    HTTP server rather than a web framework.
+    Kafka Streams topology over the fleet's telemetry: windowed aggregation
+    and anomaly counts, written back to telemetry.processed.
   </description>
 
   <dependencies>
@@ -25,29 +23,17 @@
       <artifactId>common</artifactId>
     </dependency>
     <dependency>
-      <groupId>org.eclipse.paho</groupId>
-      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-core</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>com.h2database</groupId>
-      <artifactId>h2</artifactId>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-streams</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.kafka</groupId>
-      <artifactId>kafka-clients</artifactId>
+      <artifactId>kafka-streams-test-utils</artifactId>
     </dependency>
   </dependencies>
 
   <build>
     <plugins>
-      <!-- Dependencies beside the jar rather than shaded into it. The
-           container copies them as a separate layer, so a code change
-           rebuilds one small layer instead of a fat jar, and the image keeps
-           an honest record of what the module actually depends on. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-dependency-plugin</artifactId>
@@ -69,7 +55,7 @@
         <configuration>
           <archive>
             <manifest>
-              <mainClass>io.fleet.gateway.Main</mainClass>
+              <mainClass>io.fleet.stream.Main</mainClass>
               <addClasspath>true</addClasspath>
               <classpathPrefix>dependency/</classpathPrefix>
             </manifest>

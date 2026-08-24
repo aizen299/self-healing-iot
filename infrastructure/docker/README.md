@@ -3,9 +3,12 @@
 Dockerfiles per module and the root `docker-compose.yml` for running the
 local stack: MQTT broker, gateway, and a fleet of simulated devices.
 
-**Status:** Phase 7 complete for the broker, gateway, and fleet. Kafka, a
-time-series database, Prometheus, and Grafana join the stack as their
-phases land.
+**Status:** broker, gateway, fleet, Kafka, and the stream processor. A
+time-series database, Prometheus, and Grafana join as their phases land.
+
+Kafka is the heaviest service by a wide margin. `docker compose up broker
+gateway` is the light path and is enough for anything that does not need
+streaming.
 
 Taken **before** Phase 6 — see
 [ADR-008](../../docs/decisions/ADR-008-containerisation-before-kafka.md).
@@ -55,11 +58,14 @@ Verify everything builds and works, without leaving a stack running:
 
 ## Measured footprint
 
-The whole stack in about **204 MB** against limits totalling 896 MB:
+The full stack including Kafka, about **800 MB** against limits totalling
+2176 MB. Without Kafka and the stream processor it is about 240 MB:
 
 | Service | Used | Limit |
 |---|---|---|
-| gateway | 106 MB | 512 MB |
+| kafka | 392 MB | 1024 MB |
+| stream-processor | 169 MB | 512 MB |
+| gateway | 139 MB | 512 MB |
 | fleet (10 devices) | 95 MB | 256 MB |
 | broker | 3 MB | 128 MB |
 

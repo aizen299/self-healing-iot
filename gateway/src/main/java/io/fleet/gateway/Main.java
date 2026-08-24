@@ -6,6 +6,10 @@ import io.fleet.gateway.store.H2TelemetryStore;
 import io.fleet.gateway.store.NoOpTelemetryStore;
 import io.fleet.gateway.store.StoreConfig;
 import io.fleet.gateway.store.StoreMaintainer;
+import io.fleet.gateway.kafka.ForwarderConfig;
+import io.fleet.gateway.kafka.KafkaTelemetryForwarder;
+import io.fleet.gateway.kafka.NoOpForwarder;
+import io.fleet.gateway.kafka.TelemetryForwarder;
 
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
@@ -30,17 +34,20 @@ public final class Main {
         // One policy object, so the detector's rules have a single source.
         HealthPolicy policy = config.healthPolicy();
         StoreConfig storeConfig = StoreConfig.fromEnv();
+        ForwarderConfig kafkaConfig = ForwarderConfig.fromEnv();
 
         printHeader(config);
 
         CountDownLatch stopped = new CountDownLatch(1);
         CountDownLatch finished = new CountDownLatch(1);
 
-        try (TelemetryStore store = openStore(storeConfig);
+        try (TelemetryForwarder forwarder = openForwarder(kafkaConfig);
+             TelemetryStore store = openStore(storeConfig);
              StoreMaintainer maintenance = new StoreMaintainer(store, storeConfig);
-             MqttIngestor ingestor = new MqttIngestor(config, registry, metrics, policy, store);
+             MqttIngestor ingestor = new MqttIngestor(config, registry, metrics, policy,
+                     store, forwarder, java.time.Clock.systemUTC());
              HealthMonitor monitor = new HealthMonitor(registry, policy, metrics,
-                     ingestor, store, config.monitorIntervalMillis());
+                     ingestor, store, forwarder, config.monitorIntervalMillis());
              HealthApi api = new HealthApi(config, registry, metrics, store)) {
 
             // Closes the cycle described on MqttIngestor.onTransition: the
@@ -75,7 +82,7 @@ public final class Main {
                 stopped.await();
             }
 
-            printSummary(registry, metrics, store);
+            printSummary(registry, metrics, store, forwarder);
         } finally {
             finished.countDown();
         }
@@ -89,6 +96,28 @@ public final class Main {
      * being unavailable must not stop it starting — but the operator has to
      * know the history is not being kept.
      */
+    /**
+     * Opens the Kafka forwarder, or a null object when it is off.
+     *
+     * <p>Off by default, and never fatal when on: the gateway ingests,
+     * detects, and persists without Kafka, so an unreachable broker must not
+     * stop any of that. Kafka is a downstream copy, not the system of record.
+     */
+    private static TelemetryForwarder openForwarder(ForwarderConfig kafkaConfig) {
+        if (!kafkaConfig.enabled()) {
+            System.out.println("kafka forwarding disabled");
+            return new NoOpForwarder();
+        }
+        try {
+            System.out.println("forwarding to kafka at " + kafkaConfig.bootstrapServers());
+            return new KafkaTelemetryForwarder(kafkaConfig);
+        } catch (RuntimeException e) {
+            System.err.println("could not create the kafka producer, continuing without"
+                    + " forwarding: " + e.getMessage());
+            return new NoOpForwarder();
+        }
+    }
+
     private static TelemetryStore openStore(StoreConfig storeConfig) {
         if (!storeConfig.enabled()) {
             System.out.println("telemetry store disabled; history will not be kept");
@@ -136,8 +165,8 @@ public final class Main {
                 System.getProperty("java.version"));
     }
 
-    private static void printSummary(
-            DeviceRegistry registry, GatewayMetrics metrics, TelemetryStore store) {
+    private static void printSummary(DeviceRegistry registry, GatewayMetrics metrics,
+            TelemetryStore store, TelemetryForwarder forwarder) {
         // Printed alongside the figures, not buried in a log line: a run that
         // lost readings must be hard to mistake for one that did not.
         long dropped = store.droppedWrites();
@@ -155,6 +184,7 @@ public final class Main {
                 recoveries        : %d (mean %d ms)
                 monitor errors    : %d
                 store errors      : %d
+                kafka failures    : %d
                 history           : %s
                 telemetry accepted: %d
                 telemetry rejected: %d (malformed %d, invalid %d)
@@ -175,6 +205,7 @@ public final class Main {
                 metrics.meanRecoveryMillis(),
                 metrics.monitorErrorCount(),
                 metrics.storeErrorCount(),
+                forwarder.forwardFailures(),
                 historyState,
                 metrics.acceptedCount(),
                 metrics.rejectedCount(),

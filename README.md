@@ -76,10 +76,10 @@ and current implementation status.
 
 ## Status
 
-**Phases 1–5 and 7 complete — a containerised fleet whose failures are
-detected and recorded.** `common/`, `edge-device/`, and `gateway/` are
-implemented, tested, and runnable; 135 tests pass. The remaining modules are
-still scaffolding.
+**Phases 1–7 complete — a containerised fleet whose failures are detected,
+recorded, and streamed.** `common/`, `edge-device/`, `gateway/`, and
+`stream-processor/` are implemented, tested, and runnable; 140 tests pass.
+`recovery-operator/` is still scaffolding.
 
 Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
 database need a server, and the phase that supplies servers came after both
@@ -113,6 +113,12 @@ over HTTP for device history and fleet aggregates — including the recovery
 timings Pillar B's MTTR is computed from
 ([ADR-007](docs/decisions/ADR-007-telemetry-storage.md)).
 
+The gateway also forwards to Kafka, where a Kafka Streams topology derives
+windowed fleet statistics. **Nothing on the detection path touches Kafka** —
+a broker between a device failing and the gateway noticing would add a
+failure mode to the component that exists to detect them
+([ADR-009](docs/decisions/ADR-009-kafka-streaming.md)).
+
 ## Development phases
 
 Build order is strict — never start a phase before the previous one has a
@@ -124,7 +130,7 @@ working, tested demonstration. This numbering is canonical and matches
 - [x] Phase 3 — Java gateway
 - [x] Phase 4 — Heartbeat / failure detection
 - [x] Phase 5 — Persistent telemetry
-- [ ] Phase 6 — Kafka streaming
+- [x] Phase 6 — Kafka streaming
 - [x] Phase 7 — Containerization (Docker) — *taken before Phase 6, see ADR-008*
 - [ ] Phase 8 — Kubernetes deployment
 - [ ] Phase 9 — Automatic recovery (operator)

@@ -31,13 +31,13 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phases 1–5 and 7 complete — a containerised fleet whose failures are
-detected and recorded.** Phase 7 was taken before Phase 6 (ADR-008): Kafka
+**Phases 1–7 complete — a containerised fleet whose failures are detected,
+recorded, and streamed.** Phase 7 was taken before Phase 6 (ADR-008): Kafka
 and a real TSDB both need a server, and containers supply them. The phase
 numbers still identify the work, but no longer its order.
-`common/`, `edge-device/`, and `gateway/` are implemented and tested; the
-other modules are still README-only scaffolding stating their target
-phase.
+`common/`, `edge-device/`, `gateway/`, and `stream-processor/` are
+implemented and tested; `recovery-operator/` is still README-only
+scaffolding stating its target phase.
 
 Build is **Maven** (no Gradle). The JVM is pinned to HotSpot OpenJDK 21
 by ADR-002 and enforced by `maven-enforcer-plugin` — the build fails on
@@ -100,6 +100,17 @@ fleet.
 Heartbeats ride the telemetry tick, so `GATEWAY_HEARTBEAT_INTERVAL_MS` must
 match `FLEET_PUBLISH_INTERVAL_MS`. Nothing enforces that across the two
 processes; a mismatch shows up as false failures or slow detection.
+
+Kafka is a **downstream copy, never the system of record**, and nothing on
+the detection path touches it (ADR-009). `GATEWAY_KAFKA_ENABLED` defaults to
+false; the gateway ingests, detects and persists without a broker. Telemetry
+is forwarded as the exact bytes that arrived, so the wire format has one
+encoder in the whole system. `device.failures` is a strict subset of
+`device.events` so Phase 9's controller cannot see anything it should not
+act on.
+
+Kafka is by far the heaviest service — ~392 MB against ~3 MB for Mosquitto.
+Leave it out of `docker compose up` unless the phase under test needs it.
 
 Telemetry and health events persist to an embedded H2 store behind a
 `TelemetryStore` interface (ADR-007) — embedded because containers are
