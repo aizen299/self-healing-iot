@@ -19,18 +19,20 @@ import java.util.Map;
  */
 final class FakeKubernetesApi implements KubernetesApi {
 
-    private final Map<String, String> manifests = new LinkedHashMap<>();
     private final Map<String, PodRef> pods = new LinkedHashMap<>();
 
+    /** Pods this fake actually created — not calls, so a duplicate is absent. */
     final List<String> created = new ArrayList<>();
     final List<String> deleted = new ArrayList<>();
 
     /** Set to make the next call of any kind fail, as an unreachable cluster would. */
     KubernetesException nextFailure;
 
+    /** Set to make only createPod fail, as a quota or admission webhook would. */
+    KubernetesException failOnCreate;
+
     void addPod(String name, String phase, Map<String, String> labels, String manifest) {
-        pods.put(name, new PodRef(name, phase, labels));
-        manifests.put(name, manifest);
+        pods.put(name, new PodRef(name, phase, labels, manifest));
     }
 
     @Override
@@ -42,23 +44,23 @@ final class FakeKubernetesApi implements KubernetesApi {
     }
 
     @Override
-    public String readPod(String name) throws KubernetesException {
-        failIfAsked();
-        return manifests.get(name);
-    }
-
-    @Override
     public boolean createPod(String manifestJson) throws KubernetesException {
         failIfAsked();
+        if (failOnCreate != null) {
+            KubernetesException failure = failOnCreate;
+            failOnCreate = null;
+            throw failure;
+        }
         String name = nameOf(manifestJson);
-        created.add(name);
         if (pods.containsKey(name)) {
-            // What a real API server does: 409 Conflict. This is the whole
-            // idempotency mechanism, so the fake has to honour it.
+            // What a real API server does: 409 AlreadyExists. This is the whole
+            // idempotency mechanism, so the fake has to honour it — and the
+            // refused call must not land in `created`, or a test asserting one
+            // creation would pass on the duplicate path for the wrong reason.
             return false;
         }
-        pods.put(name, new PodRef(name, "Pending", labelsOf(manifestJson)));
-        manifests.put(name, manifestJson);
+        created.add(name);
+        pods.put(name, new PodRef(name, "Pending", labelsOf(manifestJson), manifestJson));
         return true;
     }
 
@@ -67,11 +69,16 @@ final class FakeKubernetesApi implements KubernetesApi {
         failIfAsked();
         deleted.add(name);
         pods.remove(name);
-        manifests.remove(name);
     }
 
     PodRef pod(String name) {
         return pods.get(name);
+    }
+
+    /** The manifest a pod was created with, for tests that inspect it. */
+    String manifestOf(String name) {
+        PodRef pod = pods.get(name);
+        return pod == null ? null : pod.manifest();
     }
 
     int podCount() {

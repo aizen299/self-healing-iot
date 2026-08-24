@@ -53,7 +53,11 @@ public final class RecoveryId {
      * dashes only, because that is what a pod name may contain.
      */
     public static String replacementPodName(String deviceId, String recoveryId) {
-        return "edge-device-" + deviceId.replaceAll("[^a-zA-Z0-9]", "-").toLowerCase()
-                + "-r-" + recoveryId;
+        // No "edge-device-" prefix: the device id already carries the fleet's
+        // own configurable one, and prepending a second produced
+        // edge-device-device-002-r-…, which reads as a concatenation bug to
+        // anyone scanning `kubectl get pods` and hardcodes in source the one
+        // name component that should follow FLEET_DEVICE_ID_PREFIX.
+        return deviceId.replaceAll("[^a-zA-Z0-9]", "-").toLowerCase() + "-r-" + recoveryId;
     }
 }

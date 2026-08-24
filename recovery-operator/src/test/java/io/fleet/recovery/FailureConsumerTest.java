@@ -129,7 +129,6 @@ class FailureConsumerTest {
         // for a duration to measure. Emitting the subtraction anyway would put
         // a number on the topic that looks like a latency and is not one —
         // a replayed event was seen reporting a 29-second "replacement".
-        cluster.deleted.clear();
         cluster.addPod("edge-device-004", "Running",
                 Map.of("app", "edge-device", "device-id", "device-004",
                         "fleet-id", "fleet-local"),

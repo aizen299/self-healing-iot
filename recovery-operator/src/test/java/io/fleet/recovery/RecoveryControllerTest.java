@@ -56,7 +56,7 @@ class RecoveryControllerTest {
         // showing up as this device in the fleet.
         assertTrue(cluster.deleted.contains("edge-device-002"));
 
-        var replacement = cluster.pod(recovery.replacementPod());
+        var replacement = cluster.pod(recovery.pod());
         assertEquals("device-002", replacement.label("device-id"));
         assertEquals(recovery.recoveryId(), replacement.label("recovery-id"),
                 "a replacement must be traceable to the failure that caused it");
@@ -78,7 +78,7 @@ class RecoveryControllerTest {
         assertEquals(RecoveryOutcome.REPLACED, first.outcome());
         assertEquals(RecoveryOutcome.ALREADY_RECOVERED, second.outcome(),
                 "Kafka redelivers at least once; a second delivery must create nothing");
-        assertEquals(first.replacementPod(), second.replacementPod());
+        assertEquals(first.pod(), second.pod());
         assertEquals(1, controller.replacedCount());
         assertEquals(1, controller.duplicateCount());
         assertEquals(1, cluster.podCount(), "the fleet must not have grown a second device-002");
@@ -103,7 +103,7 @@ class RecoveryControllerTest {
         Recovery afterRestart = restarted.onFailure(event);
 
         assertEquals(RecoveryOutcome.ALREADY_RECOVERED, afterRestart.outcome());
-        assertEquals(first.replacementPod(), afterRestart.replacementPod());
+        assertEquals(first.pod(), afterRestart.pod());
         assertEquals(0, restarted.replacedCount(),
                 "the guarantee must come from the cluster, not from what the operator remembers");
         assertEquals(1, cluster.podCount());
@@ -120,7 +120,7 @@ class RecoveryControllerTest {
         // The replacement dies too. That is a new failure and needs a new
         // recovery — deduplicating on device id alone would leave the fleet
         // permanently one device short.
-        String replacementPod = first.replacementPod();
+        String replacementPod = first.pod();
         cluster.addPod(replacementPod, "Failed",
                 Map.of("app", "edge-device", "device-id", "device-002",
                         "fleet-id", "fleet-local", "recovery-id", first.recoveryId()),
@@ -159,6 +159,94 @@ class RecoveryControllerTest {
         assertEquals(1, controller.replacedCount());
         assertEquals(1, cluster.podCount(),
                 "device-002 must end up with exactly one pod: " + cluster.podNames());
+        assertEquals(1, cluster.created.size(),
+                "only one pod should ever have been created: " + cluster.created);
+    }
+
+    @Test
+    @DisplayName("the storm guard holds even with replaceLiveDevices on")
+    void doesNotStormWhenLiveDevicesMayBeReplaced() {
+        // The flag exists for the wedged-device case: the pod is Running and
+        // the heartbeat has stopped, so a live pod must not block replacement.
+        // It must not also mean "ignore a recovery already in progress" — that
+        // turns every event arriving during a replacement's startup into
+        // another delete-and-create, each one killing the pod that was about
+        // to end the outage.
+        RecoveryController eager = new RecoveryController(cluster, new ReplacementFactory(),
+                OperatorConfig.from(Map.of("OPERATOR_REPLACE_LIVE_DEVICES", "true")),
+                Clock.fixed(Instant.ofEpochMilli(DETECTED_AT + 900), ZoneOffset.UTC));
+        cluster.addPod("edge-device-002", "Running", deviceLabels("device-002"),
+                podManifest("edge-device-002", "device-002", "1"));
+
+        Recovery wedged = eager.onFailure(failureOf("device-002", DETECTED_AT));
+        assertEquals(RecoveryOutcome.REPLACED, wedged.outcome(),
+                "with the flag on, a Running but wedged device must be replaced");
+
+        Recovery duringStartup = eager.onFailure(failureOf("device-002", DETECTED_AT + 300));
+        Recovery stillStarting = eager.onFailure(failureOf("device-002", DETECTED_AT + 600));
+
+        assertEquals(RecoveryOutcome.NOT_NEEDED, duringStartup.outcome());
+        assertEquals(RecoveryOutcome.NOT_NEEDED, stillStarting.outcome());
+        assertEquals(1, eager.replacedCount());
+        assertEquals(1, cluster.podCount(), cluster.podNames().toString());
+    }
+
+    @Test
+    @DisplayName("a failed create leaves the old pod to clone from")
+    void doesNotDestroyTheSourceWhenCreationFails() {
+        // Deleting first is destructive: with the whole fleet down there is no
+        // sibling either, so a create that fails after the delete leaves the
+        // device permanently unrecoverable by the operator's own hand.
+        cluster.addPod("edge-device-002", "Failed", deviceLabels("device-002"),
+                podManifest("edge-device-002", "device-002", "1"));
+        cluster.failOnCreate = new KubernetesException("exceeded quota");
+
+        Recovery refused = controller.onFailure(failureOf("device-002"));
+        assertEquals(RecoveryOutcome.FAILED, refused.outcome());
+        assertTrue(cluster.deleted.isEmpty(),
+                "nothing may be deleted when the replacement was not created");
+
+        // The retry finds the old pod still there and succeeds.
+        Recovery retry = controller.onFailure(failureOf("device-002"));
+        assertEquals(RecoveryOutcome.REPLACED, retry.outcome());
+        assertEquals(1, cluster.podCount(), cluster.podNames().toString());
+    }
+
+    @Test
+    @DisplayName("a pod on a silent node is replaced, not treated as alive")
+    void replacesADeviceWhoseNodeStoppedReporting() {
+        // Phase Unknown means the kubelet stopped reporting — a partitioned or
+        // dead node, which is one of the failure modes recovery exists for.
+        // Counting it as present would leave the fleet permanently short while
+        // the operator reported it had nothing to do.
+        cluster.addPod("edge-device-002", "Unknown", deviceLabels("device-002"),
+                podManifest("edge-device-002", "device-002", "1"));
+
+        Recovery recovery = controller.onFailure(failureOf("device-002"));
+
+        assertEquals(RecoveryOutcome.REPLACED, recovery.outcome());
+    }
+
+    @Test
+    @DisplayName("both recoveries of one device stay in the ledger")
+    void theLedgerKeepsEveryRecovery() {
+        cluster.addPod("edge-device-002", "Failed", deviceLabels("device-002"),
+                podManifest("edge-device-002", "device-002", "1"));
+
+        Recovery first = controller.onFailure(failureOf("device-002", DETECTED_AT));
+        String replacementPod = first.pod();
+        cluster.addPod(replacementPod, "Failed",
+                Map.of("app", "edge-device", "device-id", "device-002",
+                        "fleet-id", "fleet-local", "recovery-id", first.recoveryId()),
+                podManifest(replacementPod, "device-002", "1"));
+        Recovery second = controller.onFailure(failureOf("device-002", DETECTED_AT + 60_000));
+
+        // Keyed by device, the first would have been silently overwritten and
+        // the run summary would report one recovery where the counters say two
+        // — the case repeated-failure experiments produce most of.
+        assertEquals(2, controller.ledger().size(), controller.ledger().toString());
+        assertTrue(controller.ledger().containsKey(first.recoveryId()));
+        assertTrue(controller.ledger().containsKey(second.recoveryId()));
     }
 
     @Test
@@ -186,14 +274,14 @@ class RecoveryControllerTest {
         Recovery recovery = controller.onFailure(failureOf("device-002"));
 
         assertEquals(RecoveryOutcome.REPLACED, recovery.outcome());
-        var replacement = cluster.pod(recovery.replacementPod());
+        var replacement = cluster.pod(recovery.pod());
         assertEquals("device-002", replacement.label("device-id"),
                 "cloning a sibling must not make the replacement claim to be that sibling");
     }
 
     @Test
     @DisplayName("the replacement is given its own slice of the fleet")
-    void replacementRunsTheRightDeviceIndex() throws Exception {
+    void replacementRunsTheRightDeviceIndex() {
         cluster.addPod("edge-device-001", "Running", deviceLabels("device-001"),
                 podManifest("edge-device-001", "device-001", "0"));
 
@@ -202,7 +290,7 @@ class RecoveryControllerTest {
         // device-003 is the third device, so offset 2. Getting this wrong
         // gives a replacement the right name and another device's data,
         // because the id and the sensor seed both derive from the index.
-        String manifest = cluster.readPod(recovery.replacementPod());
+        String manifest = cluster.manifestOf(recovery.pod());
         assertTrue(manifest.contains("\"FLEET_DEVICE_INDEX_OFFSET\""), manifest);
         assertTrue(manifest.contains("\"value\":\"2\""), manifest);
         assertFalse(manifest.contains("\"value\":\"0\""),

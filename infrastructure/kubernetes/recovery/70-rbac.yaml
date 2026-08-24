@@ -23,12 +23,14 @@ metadata:
   name: recovery-operator
   namespace: fleet
 rules:
-  # Exactly the four calls the operator makes, and no more.
+  # Exactly the three calls the operator makes, and no more.
   #
   # No "pods/exec", no "pods/portforward", no secrets, no configmaps: this
-  # controller reads a pod spec, creates a pod, and deletes a pod. `watch` is
-  # absent too — the trigger is a Kafka topic (ADR-011), so the operator never
-  # observes the cluster continuously.
+  # controller lists pods, creates a pod, and deletes a pod. `watch` is absent
+  # because the trigger is a Kafka topic (ADR-011), so the operator never
+  # observes the cluster continuously — and `get` is absent because the list
+  # response already carries each pod's full spec, so there was never a reason
+  # to fetch one again.
   #
   # `create` and `delete` on pods is a real privilege. It is bounded by the
   # namespace above and by the operator only ever acting on what it found via
@@ -36,7 +38,7 @@ rules:
   # which is why the controller checks the device-id label itself.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "create", "delete"]
+    verbs: ["list", "create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
