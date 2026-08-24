@@ -71,10 +71,12 @@ public final class HealthApi implements AutoCloseable {
 
     public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
             TelemetryStore store) throws IOException {
-        // No ingestor to ask, so readiness reports connected. Used by tests
-        // and by any caller that drives the registry directly; the running
-        // gateway always passes the real connection.
-        this(config, registry, metrics, store, () -> true);
+        // Fail closed. With no ingestor to ask, this API cannot see a broker
+        // connection, and reporting one it cannot see is the dangerous
+        // direction: a caller that forgets the supplier would get a /ready
+        // that can never return 503, silently reinstating the defect the
+        // endpoint exists to fix, with every probe still answering 200.
+        this(config, registry, metrics, store, () -> false);
     }
 
     public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,

@@ -23,6 +23,13 @@ nodes:
       - containerPort: 30080
         hostPort: 18080
         protocol: TCP
+      # The gateway again, through the admin Service, which publishes the pod
+      # whether or not it is ready. Readiness withdraws the endpoint above, and
+      # with one replica that makes /health unreachable from the host during
+      # exactly the broker outage an operator most wants to inspect.
+      - containerPort: 30081
+        hostPort: 18081
+        protocol: TCP
       # The broker, so mosquitto_sub from the host can watch the fleet — the
       # same debugging path the earlier phases used.
       #

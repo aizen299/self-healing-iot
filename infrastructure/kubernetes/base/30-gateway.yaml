@@ -31,6 +31,38 @@ spec:
       # kind maps this to the host's 18080.
       nodePort: 30080
 ---
+# A second route to the same pod, for humans.
+#
+# The Service above is correct and has a consequence: readiness withdraws the
+# endpoint, and with replicas: 1 there is no other backend, so during a broker
+# outage the gateway becomes unreachable from outside the cluster. That is
+# precisely the moment an operator wants /health and /history — and the
+# gateway is still serving both, having stayed up and kept its store, exactly
+# as ADR-010 says it should. It was reachable only via `kubectl exec`.
+#
+# publishNotReadyAddresses keeps this Service pointing at the pod whether or
+# not it is ready. It must never be the one application traffic uses; it
+# exists so that "stay up and keep serving history" is true of the deployment
+# and not only of the process.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-admin
+  namespace: fleet
+  labels:
+    app: gateway
+spec:
+  type: NodePort
+  publishNotReadyAddresses: true
+  selector:
+    app: gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      # kind maps this to the host's 18081.
+      nodePort: 30081
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -98,10 +130,15 @@ spec:
             limits:
               memory: 32Mi
       securityContext:
-        # The image already runs as the unprivileged `fleet` user; this makes
-        # the PVC arrive owned by that user's group rather than by root, which
-        # is otherwise the first thing to break when a volume appears.
-        fsGroup: 1000
+        # 999, because that is what the image's `fleet` group actually is:
+        # `groupadd --system` allocates from the system range, and
+        # `docker run --entrypoint sh fleet/gateway:0.1.0 -c id` reports
+        # uid=999(fleet) gid=999(fleet). With any other value the volume still
+        # ends up writable — Kubernetes adds fsGroup to the process's
+        # supplementary groups — but it would be owned by a group the user is
+        # not otherwise in, and the next person to reason about ownership from
+        # this line would be reasoning from a false premise.
+        fsGroup: 999
       containers:
         - name: gateway
           image: fleet/gateway:0.1.0
@@ -131,10 +168,21 @@ spec:
               value: "8080"
             - name: GATEWAY_CLIENT_ID
               value: fleet-gateway
-            # Off. Kafka is a downstream copy and nothing on the detection
-            # path touches it (ADR-009); the overlay in ../kafka/ turns it on.
-            - name: GATEWAY_KAFKA_ENABLED
-              value: "false"
+          # Kafka settings, and only when the overlay in ../kafka/ has been
+          # applied. optional: true means the base stack runs without that
+          # ConfigMap existing, and GATEWAY_KAFKA_ENABLED then falls back to
+          # the application's own default of false (ADR-009: Kafka is a
+          # downstream copy, and nothing on the detection path touches it).
+          #
+          # envFrom rather than an explicit env entry with a hardcoded "false":
+          # an explicit env always wins over envFrom, so a literal here would
+          # make the overlay unable to turn Kafka on, which is what forced the
+          # previous version to patch it imperatively with `kubectl set env` —
+          # a change the next `kubectl apply` then reverted.
+          envFrom:
+            - configMapRef:
+                name: fleet-kafka
+                optional: true
           volumeMounts:
             - name: data
               mountPath: /app/data
@@ -163,7 +211,10 @@ spec:
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 20
+            # No initialDelaySeconds: the startupProbe below already gates
+            # this one, and the kubelet keeps liveness disabled until it
+            # passes. A second startup grace here would be unreachable
+            # configuration stating a different number from the real one.
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 3

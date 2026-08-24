@@ -40,13 +40,30 @@ say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
   say "creating the kind cluster"
+  # kind switches the current context to the cluster it just made, so simply
+  # not calling `kubectl config use-context` is not enough to leave the user's
+  # kubeconfig alone. Put it back.
+  previous_context="$(kubectl config current-context 2>/dev/null || true)"
   kind create cluster --config "$HERE/kind-cluster.yaml"
+  if [ -n "$previous_context" ]; then
+    kubectl config use-context "$previous_context" >/dev/null
+    echo "current context left as $previous_context; this script uses --context"
+  else
+    kubectl config unset current-context >/dev/null
+    echo "no current context was set before; left unset. This script uses --context"
+  fi
 fi
 
-# kubectl's fallback when no context is set is http://localhost:8080, which on
-# this machine is Jenkins — it answers, so the failure looks like a puzzling
-# authentication error rather than "you are not talking to Kubernetes".
-kubectl config use-context "kind-$CLUSTER" >/dev/null
+# --context on every call, rather than `kubectl config use-context`. That
+# command changes the user's default context globally and never changes it
+# back, so running this script would silently re-point every kubectl in every
+# terminal at the kind cluster — including the next one typed at a real one.
+#
+# It has to be set somehow: kubectl's fallback when no context is configured
+# is http://localhost:8080, which on this machine is Jenkins. It answers, so
+# the failure reads as a puzzling authentication error rather than "you are
+# not talking to Kubernetes".
+KUBECTL=(kubectl --context "kind-$CLUSTER")
 
 say "building images"
 IMAGES=(gateway edge-device)
@@ -56,6 +73,41 @@ fi
 for target in "${IMAGES[@]}"; do
   docker build -f "$ROOT/infrastructure/docker/Dockerfile" \
     --target "$target" -t "fleet/$target:$TAG" "$ROOT"
+done
+
+# The third-party images too, not just ours.
+#
+# A fresh kind node has an empty image cache, so it pulls mosquitto and
+# Kafka's ~392 MB over the network while the rollout timeouts below are
+# already running — the first deploy on a new cluster fails on a slow link
+# with everything stuck in ContainerCreating. The host has these already from
+# compose, and side-loading them costs seconds. Pinned by digest here and in
+# the manifests, so the two cannot drift apart.
+BROKER_IMAGE=eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
+KAFKA_IMAGE=apache/kafka@sha256:fbc7d7c428e3755cf36518d4976596002477e4c052d1f80b5b9eafd06d0fff2f
+
+THIRD_PARTY=("$BROKER_IMAGE")
+if [ "$WITH_KAFKA" = true ]; then
+  THIRD_PARTY+=("$KAFKA_IMAGE")
+fi
+
+# Pulled inside the node, not side-loaded from the host. `kind load
+# docker-image` cannot take a digest reference: the host's Docker store holds
+# only the single-platform manifest it pulled, so the export is missing content
+# the digest names and ctr rejects it. crictl pulls the real thing.
+#
+# It has to happen here rather than being left to the kubelet, because a fresh
+# node has an empty image cache and Kafka's image is ~392 MB: left implicit, the
+# download runs inside the rollout timeouts below and the first deploy on a new
+# cluster fails with everything stuck in ContainerCreating.
+#
+# Best effort — if this fails the kubelet still pulls, just more slowly, so a
+# pull error here should not abort a deploy that would otherwise work.
+say "pre-pulling third-party images into the node"
+for image in "${THIRD_PARTY[@]}"; do
+  echo "  $image"
+  docker exec "$CLUSTER-control-plane" crictl pull "$image" >/dev/null 2>&1 \
+    || echo "  (pre-pull failed; leaving it to the kubelet)"
 done
 
 say "loading images into the cluster"
@@ -71,38 +123,109 @@ done
 # --ignore-not-found so a first run is not an error, and --wait so the new pods
 # are not rejected as duplicates of ones still terminating.
 say "replacing device pods"
-kubectl -n "$NAMESPACE" delete pod -l app=edge-device --ignore-not-found --wait
+"${KUBECTL[@]}" -n "$NAMESPACE" delete pod -l app=edge-device --ignore-not-found --wait
 
 say "applying manifests"
-kubectl apply -f "$HERE/base/"
+"${KUBECTL[@]}" apply -f "$HERE/base/"
 if [ "$WITH_KAFKA" = true ]; then
-  kubectl apply -f "$HERE/kafka/"
-  kubectl -n "$NAMESPACE" set env deployment/gateway GATEWAY_KAFKA_ENABLED=true
+  # No `set env` here any more. The fleet-kafka ConfigMap in that directory
+  # carries both GATEWAY_KAFKA_ENABLED and the bootstrap address, and the
+  # gateway picks it up with an optional configMapRef — so applying the
+  # overlay is the switch, and the next `apply -f base/` has nothing to
+  # revert. The rollout restart below is what makes the gateway read it.
+  "${KUBECTL[@]}" apply -f "$HERE/kafka/"
+fi
+
+say "waiting for the pipeline"
+"${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/broker --timeout=300s
+
+# Kafka before anything that talks to it, and before the gateway is restarted
+# onto the new image — not merely before the script finishes.
+#
+# The gateway builds its KafkaProducer once, at startup, and a producer whose
+# bootstrap address does not resolve yet fails to construct. The gateway then
+# continues without forwarding, for the life of the process, having printed a
+# single line about it. Restarting it into a cluster where kafka-0's pod DNS
+# does not exist yet therefore produces a stack that looks entirely healthy
+# and silently forwards nothing. Observed exactly that before this ordering.
+if [ "$WITH_KAFKA" = true ]; then
+  "${KUBECTL[@]}" -n "$NAMESPACE" rollout status statefulset/kafka --timeout=600s
 fi
 
 # A code change produces a new image under the same tag, and Kubernetes cannot
 # see that: the pod spec is byte-identical, so nothing rolls. The device pods
 # were recreated above; the Deployments need telling.
 say "restarting workloads onto the new images"
-kubectl -n "$NAMESPACE" rollout restart deployment/gateway
+"${KUBECTL[@]}" -n "$NAMESPACE" rollout restart deployment/gateway
 if [ "$WITH_KAFKA" = true ]; then
-  kubectl -n "$NAMESPACE" rollout restart deployment/stream-processor
+  "${KUBECTL[@]}" -n "$NAMESPACE" rollout restart deployment/stream-processor
 fi
 
-say "waiting for the pipeline"
-kubectl -n "$NAMESPACE" rollout status deployment/broker --timeout=120s
-kubectl -n "$NAMESPACE" rollout status deployment/gateway --timeout=180s
-kubectl -n "$NAMESPACE" wait --for=condition=Ready pod \
-  -l app=edge-device --timeout=120s
+say "waiting for the workloads"
+"${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/gateway --timeout=180s
+if [ "$WITH_KAFKA" = true ]; then
+  "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/stream-processor --timeout=240s
+fi
+"${KUBECTL[@]}" -n "$NAMESPACE" wait --for=condition=Ready pod \
+  -l app=edge-device --timeout=300s
+
+# The device-id label and FLEET_DEVICE_INDEX_OFFSET encode the same identity
+# and nothing in Kubernetes can derive one from the other. A pod labelled
+# device-002 that publishes as device-003 fails silently — the gateway sees
+# valid ids and the fleet looks healthy — but Phase 9's operator selects on
+# that label and would recover the wrong pod, apparently successfully.
+#
+# So check it against what the gateway actually received, which is the only
+# authority on what each pod published.
+say "checking device-id labels against what the gateway received"
+labelled=$("${KUBECTL[@]}" -n "$NAMESPACE" get pods -l app=edge-device \
+  -o jsonpath='{range .items[*]}{.metadata.labels.device-id}{"\n"}{end}' | sort)
+
+# Only devices actually reporting. `presenceOnly:true` marks a device known
+# solely from retained presence — a ghost left on the broker by an earlier
+# run, which the gateway deliberately keeps and never acts on. Comparing
+# against every id the gateway has ever heard of would fail a perfectly good
+# deploy the first time a ghost outlived its pod.
+reporting() {
+  "${KUBECTL[@]}" -n "$NAMESPACE" exec deployment/gateway -c gateway -- \
+    sh -c 'curl -fsS http://127.0.0.1:8080/devices' 2>/dev/null \
+    | tr '{' '\n' \
+    | grep -F '"presenceOnly":false' \
+    | sed -n 's/.*"deviceId":"\([^"]*\)".*/\1/p' \
+    | sort
+}
+
+# Devices publish on their first tick, and the readiness gate above only
+# proves the process started, so give the fleet a few ticks to be heard
+# before calling a mismatch.
+for _ in $(seq 1 10); do
+  reported="$(reporting || true)"
+  [ "$labelled" = "$reported" ] && break
+  sleep 2
+done
+
+if [ "$labelled" != "$reported" ]; then
+  echo "device-id labels do not match the ids the gateway is receiving." >&2
+  echo "  labelled : $(echo "$labelled" | tr '\n' ' ')" >&2
+  echo "  reporting: $(echo "$reported" | tr '\n' ' ')" >&2
+  echo "Check FLEET_DEVICE_INDEX_OFFSET against the device-id label in base/40-devices.yaml." >&2
+  exit 1
+fi
+echo "  ok: $(echo "$labelled" | tr '\n' ' ')"
 
 say "fleet"
-kubectl -n "$NAMESPACE" get pods -o wide
+"${KUBECTL[@]}" -n "$NAMESPACE" get pods -o wide
 cat <<EOF
 
 The gateway is on http://127.0.0.1:18080 (kind maps 30080 -> 18080).
 
   curl -s http://127.0.0.1:18080/health
   curl -s http://127.0.0.1:18080/devices
+
+18081 is the same gateway through a Service that publishes it even when it is
+not ready, so /health and /history stay reachable during a broker outage:
+
+  curl -s http://127.0.0.1:18081/health
   mosquitto_sub -h 127.0.0.1 -p 11883 -t 'fleet/+/telemetry' -v
 
 Kill a device and watch the gateway notice — nothing recreates it, which is

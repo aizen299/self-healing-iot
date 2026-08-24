@@ -1,4 +1,4 @@
-# Settings both halves of the pipeline have to agree on.
+# Settings more than one workload has to agree on.
 #
 # Heartbeats ride the telemetry tick (ADR-006), so the gateway's expected
 # interval and the fleet's publish interval must be the same number. Compose
@@ -8,6 +8,12 @@
 #
 # A ConfigMap is stronger. Both workloads read the same key from the same
 # object at run time, so changing the tick changes it for both or for neither.
+#
+# Only values with more than one reader belong here. A key nothing consumes is
+# worse than no key at all: it looks like the source of truth for something,
+# so changing it looks like it will take effect. The fleet id lives on the pod
+# labels, which is where the recovery operator selects on it, and therefore
+# not here.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -21,7 +27,27 @@ data:
 
   # In-cluster DNS. The broker Service is `broker` in this namespace.
   MQTT_BROKER_URL: tcp://broker:1883
-
-  # Fleet identity, carried on every device workload as a label so the Phase 9
-  # operator can tell this fleet's pods from anything else in the namespace.
-  FLEET_ID: fleet-local
+---
+# Everything identical across the device pods, so a change lands on the whole
+# fleet at once. Three pods differing only by accident would not crash — they
+# would quietly run three different configurations while `kubectl get pods`
+# showed a uniform fleet, and the devices are supposed to be running one
+# deterministic workload.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fleet-device-config
+  namespace: fleet
+  labels:
+    app.kubernetes.io/part-of: self-healing-fleet
+data:
+  FLEET_SINK: mqtt
+  FLEET_DEVICE_COUNT: "1"
+  FLEET_VARIANT: constrained
+  # Long rather than a timed run. A device that exits partway through looks
+  # exactly like the failure this system detects, and nothing on screen would
+  # distinguish that from a bug.
+  FLEET_RUN_DURATION_SECONDS: "86400"
+  # Stated, not defaulted: the heap cap is Pillar A's independent variable and
+  # never belongs in an image.
+  JAVA_OPTS: -Xmx64m

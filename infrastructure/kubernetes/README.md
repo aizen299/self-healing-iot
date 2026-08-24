@@ -60,7 +60,9 @@ Tear the whole thing down:
 | `broker` | Deployment + NodePort Service | `Recreate`: two brokers behind one Service means a Last Will registered with the old one fires to nobody |
 | `gateway` | Deployment + NodePort Service + PVC | `Recreate`: H2 holds an exclusive lock on the store, and two clients cannot share one MQTT client id |
 | `edge-device-00N` | **bare Pods**, `restartPolicy: Never` | So that nothing but the Phase 9 operator can recover a device — see below |
-| `fleet-config` | ConfigMap | The tick interval both halves must agree on, in one place |
+| `gateway-admin` | NodePort Service, `publishNotReadyAddresses` | Keeps `/health` reachable while readiness has the gateway out of rotation |
+| `fleet-config` | ConfigMap | The tick interval and broker URL both halves must agree on |
+| `fleet-device-config` | ConfigMap | Everything identical across the device pods, so only the offset differs |
 | `kafka` | StatefulSet (optional) | Kafka advertises a hostname; a Deployment's pod name changes on restart |
 
 ## The bare Pods are the point
@@ -104,6 +106,22 @@ control plane and everything else. Nothing on the detection path touches it
 ./infrastructure/kubernetes/deploy.sh --kafka
 ```
 
+Order matters, and `deploy.sh` enforces it: the gateway builds its producer
+once at startup, so a gateway that rolls before Kafka's pod DNS resolves
+forwards nothing for the life of the process — a stack where every pod is
+healthy and `telemetry.raw` does not exist. The overlay also creates the five
+topics up front rather than relying on auto-creation, because Kafka Streams
+will not start against a source topic that does not exist yet.
+
+Applying the overlay *is* the switch — the `fleet-kafka` ConfigMap carries
+both the flag and the bootstrap address, and the gateway reads it with an
+optional `configMapRef`. Turning it off means removing it, not editing a
+flag:
+
+```bash
+kubectl delete -f infrastructure/kubernetes/kafka/ && kubectl -n fleet rollout restart deployment/gateway
+```
+
 ## Probes
 
 The gateway answers two different questions, and Phase 8 is what forced the
@@ -113,6 +131,15 @@ distinction:
 |---|---|---|
 | readiness | `/ready` | Should traffic come here? 503 until the broker connection is up |
 | liveness | `/health` | Is this process wedged? 200 whatever the broker is doing |
+
+At one replica, readiness withdrawing the endpoint withdraws the only one,
+so during a broker outage the gateway drops off 18080 entirely. The
+`gateway-admin` Service publishes the pod regardless of readiness for that
+reason:
+
+```bash
+curl -s http://127.0.0.1:18081/health
+```
 
 `/health` alone could not serve as a readiness probe — it can never fail
 while the process lives, so a Service would keep routing to a gateway that
