@@ -188,4 +188,17 @@ class HealthApiTest {
             assertTrue(up.body().contains("\"status\":\"READY\""), up.body());
         }
     }
+
+    @Test
+    @DisplayName("an API built without a connection supplier fails closed")
+    void readinessWithoutASupplierReportsNotReady() throws Exception {
+        // The convenience constructors cannot see a broker, and the dangerous
+        // default is the optimistic one: a caller that forgets the supplier
+        // would get a /ready that can never return 503, quietly restoring the
+        // defect the endpoint exists to fix while every probe still passes.
+        HttpResponse<String> response = get("/ready");
+
+        assertEquals(503, response.statusCode());
+        assertTrue(response.body().contains("\"brokerConnected\":false"), response.body());
+    }
 }

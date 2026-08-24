@@ -58,6 +58,19 @@ public record DeviceConfig(
      */
     public static final int MAX_DEVICE_ID_PREFIX_LENGTH = 64;
 
+    /**
+     * Highest device index any process may own.
+     *
+     * <p>Bounded for the same reason as the prefix above, and against the same
+     * failure. {@code deviceIndexOffset + deviceCount} is int arithmetic: at
+     * offset 2147483000 with 1000 devices it overflows negative, the factory's
+     * loop never runs, and the harness reports a completed run at zero
+     * throughput — a silently empty fleet rather than a rejected
+     * configuration. A million devices is four orders of magnitude past
+     * ADR-003's scope and still nowhere near the overflow.
+     */
+    public static final int MAX_DEVICE_INDEX = 1_000_000;
+
     public DeviceConfig {
         if (variant == null) {
             throw new ConfigurationException("variant is required");
@@ -82,6 +95,14 @@ public record DeviceConfig(
         if (deviceIndexOffset < 0) {
             throw new ConfigurationException(
                     "deviceIndexOffset must be >= 0, got " + deviceIndexOffset);
+        }
+        // Widened to long deliberately: the sum is what overflows, so checking
+        // it in int arithmetic would check the wrapped value.
+        long highestIndex = (long) deviceIndexOffset + deviceCount;
+        if (highestIndex > MAX_DEVICE_INDEX) {
+            throw new ConfigurationException(
+                    "deviceIndexOffset + deviceCount must be <= " + MAX_DEVICE_INDEX
+                            + ", got " + highestIndex);
         }
         if (publishIntervalMillis < 1) {
             throw new ConfigurationException(

@@ -8,7 +8,36 @@
 # without it and this stays out of `kubectl apply -f base/`.
 #
 #   kubectl apply -f infrastructure/kubernetes/kafka/
-#   kubectl -n fleet set env deploy/gateway GATEWAY_KAFKA_ENABLED=true
+#   kubectl -n fleet rollout restart deployment/gateway
+#
+# Turning it back off means deleting the overlay, not editing a flag:
+#
+#   kubectl delete -f infrastructure/kubernetes/kafka/
+#   kubectl -n fleet rollout restart deployment/gateway
+---
+# The gateway's Kafka settings. It picks these up with an optional
+# configMapRef, so this object existing *is* the switch — there is no flag in
+# base/ to contradict, and nothing has to be patched imperatively after an
+# apply. The previous version used `kubectl set env`, which the next
+# `kubectl apply -f base/` then reverted.
+#
+# It also means the bootstrap address is written once. The earlier split —
+# enabled here, address nowhere — left the gateway forwarding to
+# ForwarderConfig's localhost:9092 default: Kafka and the stream processor
+# came up healthy, the gateway reported forwarding on, and every record went
+# into forwardFailures with telemetry.raw empty.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fleet-kafka
+  namespace: fleet
+  labels:
+    app.kubernetes.io/part-of: self-healing-fleet
+data:
+  GATEWAY_KAFKA_ENABLED: "true"
+  # The StatefulSet's stable per-pod DNS name; see the advertised listener
+  # below, which must be the same string.
+  KAFKA_BOOTSTRAP_SERVERS: kafka-0.kafka.fleet.svc.cluster.local:9092
 ---
 apiVersion: v1
 kind: Service

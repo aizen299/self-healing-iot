@@ -13,9 +13,16 @@ spec:
   selector:
     matchLabels:
       app: stream-processor
-  # Recreate. Kafka Streams keeps local state under a state directory tied to
-  # the application id; two instances sharing one would fight over the RocksDB
-  # lock, and the rollout would stall on a pod that cannot start.
+  # Recreate, and for a plainer reason than the one that used to be written
+  # here. That comment claimed two instances would fight over a RocksDB lock;
+  # they would not — state.dir is never configured, so each pod gets its own
+  # /tmp/kafka-streams and there is nothing shared to lock. Two instances of a
+  # Streams application simply rebalance, which Streams handles by design.
+  #
+  # The real reason is that there is one broker with one partition per topic,
+  # so a second instance has nothing to be assigned and idles while the group
+  # rebalances twice — once to admit it and once to drop it. Recreate skips
+  # both for a workload that can never usefully have two replicas.
   strategy:
     type: Recreate
   template:
@@ -25,13 +32,63 @@ spec:
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 45
+      # Kafka Streams refuses to start against a source topic that does not
+      # exist — MissingSourceTopicException on the first rebalance, which kills
+      # the stream thread and leaves a Running container with a dead topology.
+      #
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE does not help: a topic appears when a
+      # *producer* first writes to it, so telemetry.raw does not exist until
+      # the gateway has forwarded its first reading. Whether this pod or that
+      # first reading wins is a race, and losing it is not recoverable —
+      # observed as a crash-loop that stopped only once telemetry started
+      # flowing.
+      #
+      # So the topics are created rather than hoped for. --if-not-exists makes
+      # it idempotent, which matters because this runs on every restart.
+      initContainers:
+        - name: create-topics
+          image: apache/kafka@sha256:fbc7d7c428e3755cf36518d4976596002477e4c052d1f80b5b9eafd06d0fff2f
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fleet-kafka
+                  key: KAFKA_BOOTSTRAP_SERVERS
+          command:
+            - sh
+            - -c
+            # One partition and one replica: there is one broker, so asking for
+            # more would simply fail. The five names are KafkaTopics.java's.
+            - |
+              until /opt/kafka/bin/kafka-topics.sh \
+                  --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list >/dev/null 2>&1; do
+                echo "waiting for kafka at $KAFKA_BOOTSTRAP_SERVERS"
+                sleep 3
+              done
+              for topic in telemetry.raw telemetry.processed device.events \
+                           device.failures device.recovery; do
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+                  --create --if-not-exists --topic "$topic" \
+                  --partitions 1 --replication-factor 1
+              done
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
       containers:
         - name: stream-processor
           image: fleet/stream-processor:0.1.0
           imagePullPolicy: IfNotPresent
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
-              value: kafka-0.kafka.fleet.svc.cluster.local:9092
+              valueFrom:
+                # The same key the gateway reads, so producer and consumer
+                # cannot be pointed at different brokers.
+                configMapKeyRef:
+                  name: fleet-kafka
+                  key: KAFKA_BOOTSTRAP_SERVERS
             - name: STREAM_APPLICATION_ID
               value: fleet-stream-processor
             - name: STREAM_WINDOW_SECONDS

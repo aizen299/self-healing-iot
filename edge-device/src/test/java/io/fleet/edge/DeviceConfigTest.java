@@ -190,6 +190,34 @@ class DeviceConfigTest {
     }
 
     @Test
+    void rejectsAnOffsetThatWouldOverflowTheIndexRange() {
+        // Unbounded, this is a silently empty fleet rather than an error:
+        // offset + count overflows int, lastIndex() goes negative while
+        // firstIndex() stays positive, the factory's loop never runs, and the
+        // harness reports a completed run at zero throughput.
+        assertTrue(assertThrows(ConfigurationException.class,
+                () -> DeviceConfig.from(Map.of(
+                        "FLEET_DEVICE_INDEX_OFFSET", "2147483000",
+                        "FLEET_DEVICE_COUNT", "1000")))
+                .getMessage().contains("must be <="));
+
+        assertThrows(ConfigurationException.class,
+                () -> DeviceConfig.from(Map.of(
+                        "FLEET_DEVICE_INDEX_OFFSET", "2147483647",
+                        "FLEET_DEVICE_COUNT", "1")));
+    }
+
+    @Test
+    void acceptsAnyOffsetInsideTheBound() {
+        DeviceConfig config = DeviceConfig.from(Map.of(
+                "FLEET_DEVICE_INDEX_OFFSET",
+                Integer.toString(DeviceConfig.MAX_DEVICE_INDEX - 1),
+                "FLEET_DEVICE_COUNT", "1"));
+
+        assertEquals(DeviceConfig.MAX_DEVICE_INDEX, config.lastIndex());
+    }
+
+    @Test
     void rejectsANegativeOffset() {
         assertTrue(assertThrows(ConfigurationException.class,
                 () -> DeviceConfig.from(Map.of("FLEET_DEVICE_INDEX_OFFSET", "-1")))

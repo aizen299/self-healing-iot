@@ -47,7 +47,14 @@ it cannot serve as a readiness probe: a Service would keep routing to a
 gateway that had lost its broker and was recording nothing. Conversely
 `/ready` must not be a liveness probe, or a broker outage would restart
 every gateway in a loop when the correct behaviour is to stay up, keep
-serving history, and reconnect. See
+serving history, and reconnect.
+
+On Kubernetes that has a consequence worth knowing: readiness withdraws the
+Service endpoint, and the gateway runs as a single replica, so during a
+broker outage the normal route to it goes away too. A second Service
+(`gateway-admin`, host port 18081) publishes the pod whether or not it is
+ready, so `/health` and `/history` stay reachable exactly when they are most
+wanted. See
 [ADR-010](../decisions/ADR-010-kubernetes-deployment-shape.md).
 
 ## `GET /devices` — every known device
@@ -80,8 +87,17 @@ Both read the store rather than the registry, and both carry an
 `integrity` block:
 
 ```json
-{"integrity":{"complete":true,"readingsLost":0}}
+{"integrity":{"complete":true,"droppedWrites":0,"dropEvents":0,
+              "lastDropAtMillis":0,"summary":"complete"}}
 ```
+
+| Field | Meaning |
+|---|---|
+| `complete` | Whether the store has lost anything since startup |
+| `droppedWrites` | **Readings lost.** The number a result has to be checked against |
+| `dropEvents` | How many separate failures caused them — one outage or many |
+| `lastDropAtMillis` | When the most recent loss happened, `0` if none |
+| `summary` | The same judgement in words, as the run summary prints it |
 
 A window that is not complete cannot support a result. The gaps travel with
 the data deliberately: a store failure is never fatal — losing detection

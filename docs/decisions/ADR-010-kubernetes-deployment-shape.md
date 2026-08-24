@@ -98,7 +98,7 @@ Three singletons, three independent reasons, each sufficient on its own:
 |---|---|
 | gateway | H2 takes an exclusive file lock on the store, so the incoming pod comes up with history silently disabled — the "gaps travel with the data" failure ADR-007 was amended to make visible. Separately, two MQTT clients cannot share `GATEWAY_CLIENT_ID`; the broker drops the older one, and for the overlap the fleet is monitored by a pod that is about to be deleted |
 | broker | Devices and the gateway can land on different brokers, and a Last Will registered with the old one fires to nobody — the fast detection path silently stops working for the length of the rollout |
-| stream-processor | Kafka Streams locks its RocksDB state directory per application id; the second instance cannot start |
+| stream-processor | One broker with one partition per topic, so a second instance is assigned nothing and idles while the group rebalances twice. (Not, as an earlier draft of the manifest claimed, a RocksDB lock — `state.dir` is never configured, so the pods share no state directory and there is nothing to lock) |
 
 ### Readiness is a real question, so the gateway had to be able to answer it
 
@@ -119,6 +119,18 @@ Probing `/ready` for liveness would restart every gateway in a loop during
 a broker outage, when the correct behaviour is to stay up, keep serving
 history, and reconnect.
 
+Readiness has a cost that only shows up at one replica, and it was found by
+running it: withdrawing the endpoint withdraws the *only* endpoint, so
+during a broker outage the gateway is unreachable from outside the cluster —
+at exactly the moment an operator wants `/health` and `/history`. The
+process was fine throughout (200 on `/health`, zero restarts) and reachable
+only through `kubectl exec`, which makes "keep serving history" true of the
+process and false of the deployment.
+
+A second Service, `gateway-admin`, with `publishNotReadyAddresses: true`
+fixes that: one route that respects readiness for traffic, one that ignores
+it for humans. It must never be the one application traffic uses.
+
 ### Kafka is applied separately
 
 Kafka measured 392 MB against Mosquitto's 3 MB, and the Docker VM has under
@@ -136,6 +148,30 @@ streaming.
   ADR are the mitigation.
 - The gateway gained an endpoint. Compose's healthcheck moved to `/ready`
   too, so both deployments ask the same question.
+- **Kafka must be ready before the gateway starts, and the deploy enforces
+  the order.** The gateway builds its `KafkaProducer` once, at startup; a
+  bootstrap address that does not resolve yet makes the constructor fail, and
+  the gateway then forwards nothing for the life of the process. That is safe
+  by ADR-009 and it is silent — observed as a stack where every pod was
+  healthy, `telemetry.raw` did not exist, and one stderr line said why.
+  `deploy.sh` now waits for the Kafka StatefulSet before rolling the gateway,
+  and the log line carries the underlying cause rather than only
+  "Failed to construct kafka producer". The single-attempt behaviour itself is
+  a Phase 6 property of the forwarder and is left as it is; a Kafka restart
+  under a running gateway still ends forwarding until the gateway restarts.
+- **Kafka's topics are created, not auto-created.** Kafka Streams refuses to
+  start against a missing source topic, and
+  `KAFKA_AUTO_CREATE_TOPICS_ENABLE` only creates a topic when a producer first
+  writes to it — so whether the stream processor or the gateway's first
+  reading wins is a race, and losing it kills the stream thread inside a
+  container that stays Running. An init container creates all five topics
+  with `--if-not-exists` before the topology starts.
+- Turning Kafka on is applying `kafka/`, and turning it off is deleting it.
+  The flag and the bootstrap address live together in a ConfigMap the
+  gateway reads with an optional `configMapRef`, so nothing in `base/`
+  contradicts it and nothing has to be patched after an apply. An earlier
+  version set the flag imperatively and never set the address at all, which
+  enabled forwarding to `localhost:9092`.
 - Two deployment descriptions now exist — `docker-compose.yml` and these
   manifests — and can drift. They are kept honest by using the same images,
   the same environment variable names, and the same digests; the tick

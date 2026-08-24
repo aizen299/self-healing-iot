@@ -117,8 +117,21 @@ public final class Main {
             System.out.println("forwarding to kafka at " + kafkaConfig.bootstrapServers());
             return new KafkaTelemetryForwarder(kafkaConfig);
         } catch (RuntimeException e) {
+            // The cause, not just the message. KafkaProducer's constructor
+            // reports "Failed to construct kafka producer" and puts the actual
+            // reason — an unresolvable bootstrap address, a rejected setting —
+            // underneath, so the message alone says nothing about what to fix.
+            //
+            // Note this is the only attempt. The producer is built once at
+            // startup, so a broker that is not resolvable yet leaves this
+            // gateway forwarding nothing for the life of the process. That is
+            // safe by ADR-009 — Kafka is a downstream copy and nothing on the
+            // detection path touches it — but it is silent, so the line has to
+            // be worth reading.
+            Throwable cause = e.getCause() == null ? e : e.getCause();
             System.err.println("could not create the kafka producer, continuing without"
-                    + " forwarding: " + e.getMessage());
+                    + " forwarding for the life of this process: " + e.getMessage()
+                    + " (" + cause + ")");
             return new NoOpForwarder();
         }
     }

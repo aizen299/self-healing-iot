@@ -79,7 +79,7 @@ and current implementation status.
 **Phases 1–8 complete — a fleet on Kubernetes whose failures are detected,
 recorded, and streamed, and stay unrecovered on purpose.** `common/`,
 `edge-device/`, `gateway/`, and `stream-processor/` are implemented,
-tested, and runnable; 149 tests pass. `recovery-operator/` is still
+tested, and runnable; 157 tests pass. `recovery-operator/` is still
 scaffolding.
 
 Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
