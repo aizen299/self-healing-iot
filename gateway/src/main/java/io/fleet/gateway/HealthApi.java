@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
+import java.util.function.BooleanSupplier;
 
 /**
  * Read-only HTTP view of the gateway.
@@ -33,6 +34,8 @@ import java.util.concurrent.Executors;
  *
  * <ul>
  *   <li>{@code GET /health} — liveness plus fleet-level counters</li>
+ *   <li>{@code GET /ready} — readiness: 200 when connected to the broker,
+ *       503 when not</li>
  *   <li>{@code GET /devices} — every known device</li>
  *   <li>{@code GET /devices/{id}} — one device, 404 if unknown</li>
  * </ul>
@@ -58,6 +61,7 @@ public final class HealthApi implements AutoCloseable {
     private final GatewayMetrics metrics;
     private final HttpServer server;
     private final TelemetryStore store;
+    private final BooleanSupplier brokerConnected;
     private final JsonFactory json = new JsonFactory();
 
     public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics)
@@ -67,12 +71,22 @@ public final class HealthApi implements AutoCloseable {
 
     public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
             TelemetryStore store) throws IOException {
+        // No ingestor to ask, so readiness reports connected. Used by tests
+        // and by any caller that drives the registry directly; the running
+        // gateway always passes the real connection.
+        this(config, registry, metrics, store, () -> true);
+    }
+
+    public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
+            TelemetryStore store, BooleanSupplier brokerConnected) throws IOException {
         this.registry = registry;
         this.metrics = metrics;
         this.store = store;
+        this.brokerConnected = brokerConnected;
         this.server = HttpServer.create(
                 new InetSocketAddress(config.httpHost(), config.httpPort()), 0);
         this.server.createContext("/health", guarded(this::handleHealth));
+        this.server.createContext("/ready", guarded(this::handleReady));
         this.server.createContext("/devices", guarded(this::handleDevices));
         this.server.createContext("/history", guarded(this::handleHistory));
         this.server.createContext("/stats", guarded(this::handleStats));
@@ -99,6 +113,10 @@ public final class HealthApi implements AutoCloseable {
         byte[] body = write(generator -> {
             generator.writeStartObject();
             generator.writeStringField("status", "UP");
+            // Liveness, not readiness: the API answers whether or not the
+            // broker is reachable, because a gateway that has lost the broker
+            // is exactly what an operator needs to be able to query.
+            generator.writeBooleanField("brokerConnected", brokerConnected.getAsBoolean());
             generator.writeNumberField("devicesKnown", registry.size());
             generator.writeNumberField("devicesReporting", registry.reportingCount());
             generator.writeNumberField("devicesOnline", registry.onlineCount());
@@ -127,6 +145,33 @@ public final class HealthApi implements AutoCloseable {
             generator.writeEndObject();
         });
         respond(exchange, 200, body);
+    }
+
+    /**
+     * Readiness: is this gateway ingesting, not merely running?
+     *
+     * <p>Separate from {@code /health} because they answer different
+     * questions and Kubernetes asks both. {@code /health} is unconditionally
+     * 200 while the process lives — as a readiness probe it could never fail,
+     * so a Service would keep routing to a gateway that had lost the broker
+     * and was recording nothing.
+     *
+     * <p>Deliberately not a liveness probe. A broker outage would restart
+     * every gateway replica in a loop, when the correct behaviour is to stay
+     * up, keep serving history, and reconnect.
+     */
+    private void handleReady(HttpExchange exchange) throws IOException {
+        if (rejectNonGet(exchange)) {
+            return;
+        }
+        boolean connected = brokerConnected.getAsBoolean();
+        byte[] body = write(generator -> {
+            generator.writeStartObject();
+            generator.writeStringField("status", connected ? "READY" : "NOT_READY");
+            generator.writeBooleanField("brokerConnected", connected);
+            generator.writeEndObject();
+        });
+        respond(exchange, connected ? 200 : 503, body);
     }
 
     private void handleDevices(HttpExchange exchange) throws IOException {

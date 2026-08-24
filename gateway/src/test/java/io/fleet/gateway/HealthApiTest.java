@@ -150,4 +150,42 @@ class HealthApiTest {
                 deviceId, 1_787_484_895_182L, 20.0d, 1.0d, 90.0d, 52.52d, 13.405d,
                 DeviceStatus.OK);
     }
+
+    @Test
+    @DisplayName("/ready is 200 only while the broker connection is up")
+    void readinessFollowsTheBrokerConnection() throws Exception {
+        // A readiness probe on /health could never fail: it is unconditionally
+        // 200 while the process lives, so a Kubernetes Service would keep
+        // routing to a gateway that had lost the broker and was recording
+        // nothing at all.
+        java.util.concurrent.atomic.AtomicBoolean connected =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        GatewayConfig config = GatewayConfig.from(Map.of("GATEWAY_HTTP_PORT", "0"));
+        try (HealthApi probeApi = new HealthApi(config, registry, metrics,
+                new io.fleet.gateway.store.NoOpTelemetryStore(), connected::get)) {
+            probeApi.start();
+            String url = "http://127.0.0.1:" + probeApi.port();
+
+            HttpResponse<String> down = http.send(
+                    HttpRequest.newBuilder(URI.create(url + "/ready")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(503, down.statusCode());
+            assertTrue(down.body().contains("\"status\":\"NOT_READY\""), down.body());
+
+            // Liveness is unaffected: a broker outage must not restart the
+            // gateway, which still serves history and reconnects on its own.
+            HttpResponse<String> live = http.send(
+                    HttpRequest.newBuilder(URI.create(url + "/health")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, live.statusCode());
+            assertTrue(live.body().contains("\"brokerConnected\":false"), live.body());
+
+            connected.set(true);
+            HttpResponse<String> up = http.send(
+                    HttpRequest.newBuilder(URI.create(url + "/ready")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, up.statusCode());
+            assertTrue(up.body().contains("\"status\":\"READY\""), up.body());
+        }
+    }
 }

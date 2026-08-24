@@ -31,7 +31,7 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phases 1–7 complete — a containerised fleet whose failures are detected,
+**Phases 1–8 complete — a fleet on Kubernetes whose failures are detected,
 recorded, and streamed.** Phase 7 was taken before Phase 6 (ADR-008): Kafka
 and a real TSDB both need a server, and containers supply them. The phase
 numbers still identify the work, but no longer its order.
@@ -51,14 +51,41 @@ mvn -pl edge-device -am test                    # one module + its deps
 ```
 
 The full stack runs in containers, published on **18080** because 8080 is
-already taken on this machine:
+already taken on this machine (Jenkins):
 
 ```bash
 docker compose up --build
 ```
 
 Bring up one service at a time where you can — Docker Desktop's VM already
-claims about half of the 8 GB host, and Phase 8 measures memory on it.
+claims about half of the 8 GB host, and the experiments measure memory on it.
+
+It also runs on a local **kind** cluster, on the same port. `deploy.sh`
+builds, side-loads (there is no registry), applies, and waits:
+
+```bash
+./infrastructure/kubernetes/deploy.sh
+```
+
+Kubernetes changes the fleet's shape, deliberately: one device per pod, as
+**bare Pods with `restartPolicy: Never`** (ADR-010). A Deployment would
+restart a crashed device in about a second, so Phase 9's operator would
+never act and the reported MTTR would measure the kubelet. A dead device
+must stay dead until the operator replaces it. Device pods therefore carry
+no liveness probe either — the gateway is the only thing that decides a
+device has failed.
+
+Bare Pods are immutable, so `kubectl apply` cannot update one: `deploy.sh`
+deletes and recreates the device pods. And nothing rolls a Deployment when
+an image is rebuilt under the same tag, so it issues an explicit
+`rollout restart`.
+
+`FLEET_DEVICE_INDEX_OFFSET` is what makes one device per pod possible: it
+slices the fleet by index, and since both the id and the sensor seed derive
+from the index, `device-002` in a pod is the same simulated device as
+`device-002` in the shared harness. The shared harness stays for Pillar A —
+a per-pod JVM costs ~64 MB of baseline, which would swamp the
+constrained-vs-naive difference.
 
 Run the simulator (see `edge-device/README.md` for all variables):
 
@@ -87,7 +114,13 @@ verified with a broker running. The wire contract is
 `docs/api/mqtt-topics.md`.
 
 The gateway ingests, validates, serves fleet state on an HTTP API, and
-detects failures. Two detection paths, deliberately: the broker's Last Will
+detects failures. `/health` and `/ready` answer different questions and
+both are needed: `/health` is 200 while the process lives (liveness — a
+broker outage must not restart the gateway), `/ready` is 503 until the
+broker connection is up (readiness — nothing should route to a gateway
+that is recording nothing). Probing `/health` for readiness would never
+fail; probing `/ready` for liveness would restart-loop the fleet's monitor
+during an outage. Two detection paths, deliberately: the broker's Last Will
 for a device that dies or disconnects, and a heartbeat timeout for one that
 stays connected but wedges — telemetry is **not** treated as proof of life,
 or that second case would be undetectable (ADR-006).

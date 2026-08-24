@@ -151,4 +151,48 @@ class DeviceConfigTest {
         assertThrows(ConfigurationException.class,
                 () -> DeviceConfig.from(Map.of("FLEET_BASE_LON", "-181")));
     }
+
+    @Test
+    void ownsASliceOfTheFleetWhenGivenAnOffset() {
+        // Every per-device pod runs FLEET_DEVICE_COUNT=1, so without an offset
+        // the whole Kubernetes fleet would be one device id repeated — every
+        // pod publishing as device-001, and the gateway seeing a single device
+        // whose readings contradict each other.
+        DeviceConfig third = DeviceConfig.from(Map.of(
+                "FLEET_DEVICE_COUNT", "1",
+                "FLEET_DEVICE_INDEX_OFFSET", "2"));
+
+        assertEquals(3, third.firstIndex());
+        assertEquals(3, third.lastIndex());
+        assertEquals("device-003", third.deviceId(third.firstIndex()));
+    }
+
+    @Test
+    void aSlicedDeviceKeepsTheIdentityItHadInTheSharedHarness() {
+        // The point of slicing by index rather than renaming: device 7 in its
+        // own process must be the same simulated device as device 7 inside the
+        // 50-device harness, or the two deployments run different experiments.
+        DeviceConfig whole = DeviceConfig.from(Map.of("FLEET_DEVICE_COUNT", "50"));
+        DeviceConfig sliced = DeviceConfig.from(Map.of(
+                "FLEET_DEVICE_COUNT", "1",
+                "FLEET_DEVICE_INDEX_OFFSET", "6"));
+
+        assertEquals(whole.deviceId(7), sliced.deviceId(sliced.firstIndex()));
+        assertEquals(whole.seedFor(7), sliced.seedFor(sliced.firstIndex()));
+    }
+
+    @Test
+    void defaultsToTheWholeFleetStartingAtOne() {
+        DeviceConfig config = DeviceConfig.from(Map.of("FLEET_DEVICE_COUNT", "4"));
+
+        assertEquals(1, config.firstIndex());
+        assertEquals(4, config.lastIndex());
+    }
+
+    @Test
+    void rejectsANegativeOffset() {
+        assertTrue(assertThrows(ConfigurationException.class,
+                () -> DeviceConfig.from(Map.of("FLEET_DEVICE_INDEX_OFFSET", "-1")))
+                .getMessage().contains("deviceIndexOffset"));
+    }
 }

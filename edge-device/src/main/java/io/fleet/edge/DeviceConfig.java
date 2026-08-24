@@ -17,6 +17,8 @@ import java.util.Map;
  * @param sink                  where telemetry goes
  * @param deviceCount           devices in the fleet
  * @param deviceIdPrefix        prefix for generated device ids
+ * @param deviceIndexOffset     first device index minus one; lets a process own a
+ *                              slice of the fleet rather than always starting at 1
  * @param publishIntervalMillis delay between readings, per device
  * @param runDurationSeconds    how long the harness runs
  * @param failureMode           failure to inject, if any
@@ -32,6 +34,7 @@ public record DeviceConfig(
         SinkType sink,
         int deviceCount,
         String deviceIdPrefix,
+        int deviceIndexOffset,
         long publishIntervalMillis,
         long runDurationSeconds,
         FailureMode failureMode,
@@ -75,6 +78,10 @@ public record DeviceConfig(
         }
         if (deviceCount < 1) {
             throw new ConfigurationException("deviceCount must be >= 1, got " + deviceCount);
+        }
+        if (deviceIndexOffset < 0) {
+            throw new ConfigurationException(
+                    "deviceIndexOffset must be >= 0, got " + deviceIndexOffset);
         }
         if (publishIntervalMillis < 1) {
             throw new ConfigurationException(
@@ -129,6 +136,7 @@ public record DeviceConfig(
                 Env.enumValue(env, "FLEET_SINK", "COUNTING", SinkType::parse),
                 Env.intValue(env, "FLEET_DEVICE_COUNT", DEFAULT_DEVICE_COUNT),
                 Env.string(env, "FLEET_DEVICE_ID_PREFIX", "device"),
+                Env.intValue(env, "FLEET_DEVICE_INDEX_OFFSET", 0),
                 Env.longValue(env, "FLEET_PUBLISH_INTERVAL_MS", 1000L),
                 Env.longValue(env, "FLEET_RUN_DURATION_SECONDS", 30L),
                 Env.enumValue(env, "FLEET_FAILURE_MODE", "NONE", FailureMode::parse),
@@ -138,6 +146,23 @@ public record DeviceConfig(
                 Env.longValue(env, "FLEET_SEED", 42L),
                 Env.doubleValue(env, "FLEET_BASE_LAT", 52.5200d),
                 Env.doubleValue(env, "FLEET_BASE_LON", 13.4050d));
+    }
+
+    /**
+     * First device index this process owns, one-based.
+     *
+     * <p>Indices, not names, because the id and the seed are both derived from
+     * the index: a device pulled out into its own process keeps the id and the
+     * data it had inside a shared harness, so the two deployments run the same
+     * simulation rather than two that merely look alike.
+     */
+    public int firstIndex() {
+        return deviceIndexOffset + 1;
+    }
+
+    /** Last device index this process owns, inclusive. */
+    public int lastIndex() {
+        return deviceIndexOffset + deviceCount;
     }
 
     /** Zero-padded device id, e.g. {@code device-007}. */

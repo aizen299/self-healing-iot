@@ -5,6 +5,8 @@ local stack: MQTT broker, gateway, and a fleet of simulated devices.
 
 **Status:** broker, gateway, fleet, Kafka, and the stream processor. A
 time-series database, Prometheus, and Grafana join as their phases land.
+The same images run on Kubernetes from Phase 8 —
+[`infrastructure/kubernetes/`](../kubernetes/).
 
 Kafka is the heaviest service by a wide margin. `docker compose up broker
 gateway` is the light path and is enough for anything that does not need
@@ -52,6 +54,7 @@ Verify everything builds and works, without leaving a stack running:
 | Base images pinned by **digest** | A floating tag moves with every release, so two Phase 8 runs weeks apart would use different JVMs while both claimed to be pinned. Note the container's JVM is a *different build* from the host's pinned one — see the ADR-008 amendment; a Pillar A comparison must be entirely inside containers or entirely outside |
 | Temurin build stage | The enforcer's JVM rules, GraalVM rejection included, pass inside the image as they do on the host |
 | Dependencies beside the jar | A code change rebuilds one small layer rather than a fat jar, and the image records what the module actually depends on |
+| Healthcheck on `/ready`, not `/health` | `/health` answers 200 whenever the process is alive, so as a healthcheck it could never fail. `/ready` is 503 until the broker connection is up, which is what a healthcheck is actually asking |
 | `mem_limit` on every service | Java 21 sizes its heap from the cgroup; verified at 128 MB inside a 512 MB container rather than a share of 8 GB. An unbounded container would push this host into swap and corrupt Phase 8's memory numbers |
 | Non-root user | Nothing here needs root, and the gateway is reachable from the network |
 | One container for the whole fleet | ADR-003 scopes the simulation to a shared-JVM harness because 50 JVMs do not fit in this host's memory. Per-device containers arrive with Kubernetes, at a smaller device count, for the recovery demo |

@@ -25,7 +25,7 @@ public final class DeviceFactory {
     public static List<EdgeDevice> createFleet(DeviceConfig config, TelemetrySinkFactory sinks)
             throws SinkException {
         List<EdgeDevice> devices = new ArrayList<>(config.deviceCount());
-        for (int index = 1; index <= config.deviceCount(); index++) {
+        for (int index = config.firstIndex(); index <= config.lastIndex(); index++) {
             devices.add(createDevice(config, sinks, index));
         }
         return devices;

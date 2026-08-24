@@ -76,10 +76,11 @@ and current implementation status.
 
 ## Status
 
-**Phases 1–7 complete — a containerised fleet whose failures are detected,
-recorded, and streamed.** `common/`, `edge-device/`, `gateway/`, and
-`stream-processor/` are implemented, tested, and runnable; 140 tests pass.
-`recovery-operator/` is still scaffolding.
+**Phases 1–8 complete — a fleet on Kubernetes whose failures are detected,
+recorded, and streamed, and stay unrecovered on purpose.** `common/`,
+`edge-device/`, `gateway/`, and `stream-processor/` are implemented,
+tested, and runnable; 149 tests pass. `recovery-operator/` is still
+scaffolding.
 
 Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
 database need a server, and the phase that supplies servers came after both
@@ -119,6 +120,15 @@ a broker between a device failing and the gateway noticing would add a
 failure mode to the component that exists to detect them
 ([ADR-009](docs/decisions/ADR-009-kafka-streaming.md)).
 
+The whole stack runs on a local kind cluster, where a device is a pod. The
+device pods are **bare Pods with `restartPolicy: Never`**, which is not how
+you would deploy a service and is exactly the point: a Deployment would
+restart a crashed device in about a second, and the MTTR this project
+reports would be a measurement of the kubelet's restart loop rather than of
+the detection-and-recovery loop that is the research subject. A device that
+dies stays dead until Phase 9's operator replaces it
+([ADR-010](docs/decisions/ADR-010-kubernetes-deployment-shape.md)).
+
 ## Development phases
 
 Build order is strict — never start a phase before the previous one has a
@@ -132,7 +142,7 @@ working, tested demonstration. This numbering is canonical and matches
 - [x] Phase 5 — Persistent telemetry
 - [x] Phase 6 — Kafka streaming
 - [x] Phase 7 — Containerization (Docker) — *taken before Phase 6, see ADR-008*
-- [ ] Phase 8 — Kubernetes deployment
+- [x] Phase 8 — Kubernetes deployment
 - [ ] Phase 9 — Automatic recovery (operator)
 - [ ] Phase 10 — Observability (Prometheus / Grafana)
 - [ ] Phase 11 — Chaos experiments
@@ -174,16 +184,25 @@ installed and the default on `PATH` is not the pinned one:
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 ```
 
-Deferred until the phase that needs them: `kind` (Phase 8), Docker
-daemon (Phase 7), `helm` (Phase 13, optional).
+Deferred until the phase that needs them: `helm` (Phase 13, optional).
+`kind` 0.32.0 and `kubectl` v1.36.1 arrived with Phase 8.
 
 ## How to run
 
-The whole stack in containers:
+On Kubernetes — builds the images, side-loads them into a kind cluster, and
+waits for the pipeline:
+
+```bash
+./infrastructure/kubernetes/deploy.sh
+```
+
+Or the whole stack in containers:
 
 ```bash
 docker compose up --build
 ```
+
+Either way the gateway answers on the same port:
 
 ```bash
 curl -s http://127.0.0.1:18080/health

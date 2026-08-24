@@ -69,10 +69,12 @@ EXPOSE 8080
 ENV GATEWAY_HTTP_HOST=0.0.0.0 \
     JAVA_OPTS="-XX:MaxRAMPercentage=75"
 
-# Probes the gateway's own endpoint rather than the port: a listening socket
-# only proves the JVM started, not that it is ingesting.
+# /ready, not /health. A listening socket only proves the JVM started, and
+# /health is unconditionally 200 while the process lives — either would report
+# a gateway that had lost its broker as healthy. /ready is 503 until the
+# connection is up, which is the question a healthcheck is actually asking.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
-    CMD ["sh", "-c", "curl -fsS http://127.0.0.1:8080/health >/dev/null || exit 1"]
+    CMD ["sh", "-c", "curl -fsS http://127.0.0.1:8080/ready >/dev/null || exit 1"]
 
 # "$@" so arguments appended to docker run or compose reach the application
 # instead of being silently discarded.

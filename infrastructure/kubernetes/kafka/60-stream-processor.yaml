@@ -1,0 +1,57 @@
+# Derives fleet statistics from telemetry.raw. Off the detection path by
+# design (ADR-009) — it can lag, restart, or be absent and nothing about
+# failure detection changes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-processor
+  namespace: fleet
+  labels:
+    app: stream-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stream-processor
+  # Recreate. Kafka Streams keeps local state under a state directory tied to
+  # the application id; two instances sharing one would fight over the RocksDB
+  # lock, and the rollout would stall on a pod that cannot start.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: stream-processor
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: stream-processor
+          image: fleet/stream-processor:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka-0.kafka.fleet.svc.cluster.local:9092
+            - name: STREAM_APPLICATION_ID
+              value: fleet-stream-processor
+            - name: STREAM_WINDOW_SECONDS
+              value: "10"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          # The same file the compose healthcheck reads. A topology that cannot
+          # start — a serde mismatch, an unreachable broker — otherwise
+          # crash-loops while Kubernetes reports the pod Running, and nothing
+          # consumes telemetry.processed yet to notice the silence.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - grep -q RUNNING /app/data/streams-state
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6

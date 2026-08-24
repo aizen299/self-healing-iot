@@ -1,0 +1,114 @@
+# The MQTT broker.
+#
+# Mosquitto's config lives in a ConfigMap rather than being baked into an
+# image: it is configuration, and Phase 8 is the phase that finally has
+# somewhere proper to put it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-config
+  namespace: fleet
+data:
+  mosquitto.conf: |
+    listener 1883
+    allow_anonymous true
+
+    # Off deliberately, as in compose. Retained presence already outlives a
+    # run (ADR-004); persisting it across broker restarts as well would leave
+    # the gateway reading ghosts from experiments run days earlier — and in
+    # Kubernetes a restart is routine rather than something you did on purpose.
+    persistence false
+
+    log_dest stdout
+    log_type warning
+    log_type error
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker
+  namespace: fleet
+  labels:
+    app: broker
+spec:
+  type: NodePort
+  selector:
+    app: broker
+  ports:
+    - name: mqtt
+      port: 1883
+      targetPort: 1883
+      # Mapped to the host by kind-cluster.yaml, so mosquitto_sub from a
+      # terminal watches the same traffic the gateway sees.
+      nodePort: 30883
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker
+  namespace: fleet
+  labels:
+    app: broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: broker
+  # Recreate, not RollingUpdate. Two brokers briefly sharing one Service means
+  # devices and the gateway can be connected to different ones, and a Last Will
+  # registered on the old broker fires to nobody — the gateway's fast
+  # detection path silently stops working for the length of the rollout.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: broker
+    spec:
+      # Nothing here talks to the Kubernetes API, so it gets no token to do it
+      # with. The default is to mount one into every pod.
+      automountServiceAccountToken: false
+      containers:
+        - name: mosquitto
+          # eclipse-mosquitto:2 — the digest compose pins, for the same reason.
+          image: eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
+          ports:
+            - name: mqtt
+              containerPort: 1883
+          volumeMounts:
+            - name: config
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          # Publishing proves the broker accepts traffic. A TCP check would
+          # only prove something is listening, which is also true of a broker
+          # that has run out of file descriptors.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mosquitto_pub -h 127.0.0.1 -t healthcheck -m ok -q 0
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mosquitto_pub -h 127.0.0.1 -t healthcheck -m ok -q 0
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: mosquitto-config

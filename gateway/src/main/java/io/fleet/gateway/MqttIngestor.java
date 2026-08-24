@@ -106,6 +106,18 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
         }
     }
 
+    /**
+     * Whether the gateway currently holds a broker connection.
+     *
+     * <p>Exposed for the readiness probe. The gateway's HTTP server answers
+     * whether or not the broker is reachable, so "the process is up" and "the
+     * process is ingesting" are different questions and a load balancer needs
+     * the second one.
+     */
+    public boolean isConnected() {
+        return client.isConnected();
+    }
+
     /** Routes health transitions this ingestor observes; see the field's note. */
     public void onTransition(Consumer<HealthTransition> listener) {
         this.onTransition = listener;
