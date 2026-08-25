@@ -13,8 +13,8 @@ package io.fleet.common;
  * <p>Every name this project exposes carries a {@code fleet_} prefix,
  * deliberately including the JVM ones. Calling them {@code jvm_memory_*}
  * would claim compatibility with the Micrometer schema a dashboard might
- * expect, and these are not those metrics — they are four numbers read off
- * the MXBeans.
+ * expect, and these are not those metrics — they are a handful of numbers
+ * read off the MXBeans.
  *
  * <p>Declaration and sampling are separate calls so one {@code # HELP} can
  * head several label series, which is what the format requires: repeating the

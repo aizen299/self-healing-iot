@@ -208,9 +208,10 @@ if [ "$WITH_RECOVERY" = true ]; then
 fi
 if [ "$WITH_MONITORING" = true ]; then
   # Grafana only: it reads the dashboard ConfigMap at startup, so a dashboard
-  # edit needs a new pod. Prometheus is left alone — its config is reloaded
-  # through --web.enable-lifecycle and its series are worth keeping across a
-  # redeploy.
+  # edit needs a new pod. Prometheus is left alone deliberately — its series
+  # are worth keeping across a redeploy, and its config here does not change
+  # between runs. A config change does need a new pod: there is no reload
+  # endpoint, on purpose (see 90-prometheus.yaml).
   "${KUBECTL[@]}" -n "$NAMESPACE" rollout restart deployment/grafana
 fi
 
@@ -310,6 +311,14 @@ deploy the operator that does.
 EOF
 fi
 if [ "$WITH_MONITORING" = true ]; then
+  if [ "$WITH_RECOVERY" != true ]; then
+    cat <<EOF
+Note: the recovery-operator scrape target will show as DOWN on
+http://127.0.0.1:19090/targets. Its Service is part of --recovery, which is
+not on. The gateway panels are unaffected; the operator ones will say No data.
+
+EOF
+  fi
   cat <<EOF
 Grafana is on http://127.0.0.1:13000 — anonymous, opening on the fleet
 dashboard. Prometheus is on http://127.0.0.1:19090 for when a panel says

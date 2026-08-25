@@ -67,6 +67,31 @@ class MetricsExporterTest {
 
         assertTrue(text.contains("fleet_devices_known 2"), text);
         assertTrue(text.contains("fleet_devices_reporting 1"), text);
+
+        // And the ghost gets no fleet_device_up series at all. It is never
+        // ONLINE, so including it would draw a permanently red row on the
+        // panel whose whole job is answering "which device is down" — for a
+        // device that does not exist and that the operator will correctly
+        // never recover. Ghosts also accumulate with broker history rather
+        // than fleet size, so each one would be a series that never goes away.
+        assertFalse(text.contains("fleet_device_up{device_id=\"ghost-001\"}"), text);
+        assertTrue(text.contains("fleet_device_up{device_id=\"device-001\"}"), text);
+    }
+
+    @Test
+    @DisplayName("the histogram's +Inf bucket and its _count are the same number")
+    void countIsTheInfiniteBucket() {
+        // Read from two counters at two moments they could differ, and
+        // Prometheus reads a _count above the +Inf bucket as buckets missing.
+        // Emitting the cumulative for both makes them equal by construction.
+        metrics.recoveryObserved(700L);
+        metrics.recoveryObserved(90_000L);
+        metrics.recoveryObserved(-3L);
+
+        String text = render(true, 0L);
+
+        assertTrue(text.contains("fleet_recovery_duration_millis_bucket{le=\"+Inf\"} 2"), text);
+        assertTrue(text.contains("fleet_recovery_duration_millis_count 2"), text);
     }
 
     @Test

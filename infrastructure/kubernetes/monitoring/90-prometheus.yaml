@@ -50,6 +50,13 @@ data:
             labels:
               component: gateway
 
+      # Present unconditionally, and down until --recovery is deployed: the
+      # operator's Service lives in the recovery/ overlay and --monitoring does
+      # not imply it. That is a visibly failing target on Prometheus's targets
+      # page rather than a silent absence, which is the honest reading of "the
+      # operator is not deployed" — deploy.sh says so too when the flags are
+      # used apart. Removing the job instead would mean two versions of this
+      # file to keep in step.
       - job_name: recovery-operator
         metrics_path: /metrics
         static_configs:
@@ -125,7 +132,12 @@ spec:
             # system of record: experiments/results/ is where a number that
             # matters gets written down.
             - --storage.tsdb.retention.time=6h
-            - --web.enable-lifecycle
+            # No --web.enable-lifecycle. It exists to allow POST /-/reload,
+            # nothing here calls that, and it comes with POST /-/quit on the
+            # same listener — which this Service publishes on a NodePort mapped
+            # to the host. An admin endpoint nobody uses is only a way to stop
+            # Prometheus by accident. A config change means a new pod, which is
+            # what deploy.sh does.
           ports:
             - name: http
               containerPort: 9090

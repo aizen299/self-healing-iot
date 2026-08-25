@@ -73,8 +73,18 @@ class OperatorMetricsTest {
 
     @AfterEach
     void tearDown() {
+        // All three, in the order Main closes them. Harmless with mocks today,
+        // but the asymmetry is what lets a later switch to a real consumer —
+        // or a publisher that owns a thread — leak once per test with nothing
+        // to notice it.
         if (server != null) {
             server.close();
+        }
+        if (consumer != null) {
+            consumer.close();
+        }
+        if (publisher != null) {
+            publisher.close();
         }
     }
 
