@@ -11,7 +11,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -155,7 +154,7 @@ class RecoveryPublisherTest {
                 () -> {
                     throw new IllegalStateException("no resolvable bootstrap urls");
                 },
-                open -> open.close(Duration.ofSeconds(1)), 10_000L, Clock.systemUTC());
+                open -> open.close(Duration.ofSeconds(1)), 10_000L, System::nanoTime);
 
         try (RecoveryPublisher publisher = new RecoveryPublisher(unavailable)) {
             publisher.publish(new Recovery("device-003", "abc", "device-003-r-abc",

@@ -13,7 +13,6 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 
 import java.io.IOException;
-import java.time.Clock;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Properties;
@@ -58,9 +57,6 @@ public final class KafkaTelemetryForwarder implements TelemetryForwarder {
     /** How long the sender thread waits between looks at an empty queue. */
     private static final long IDLE_WAIT_MILLIS = 200L;
 
-    /** How long to wait after failing to build the producer before trying again. */
-    private static final long RETRY_INTERVAL_MILLIS = 10_000L;
-
     /** Bounded, so an unreachable broker cannot outlast the container's stop grace. */
     private static final long CLOSE_TIMEOUT_SECONDS = 5L;
 
@@ -98,18 +94,19 @@ public final class KafkaTelemetryForwarder implements TelemetryForwarder {
         // Built once and captured, so a retry does not re-derive it — and so
         // the closure holds a small Properties rather than the config record.
         Properties props = properties(config);
+        // Retry cadence comes from LazyResource, not from a constant here:
+        // the operator holds the other producer, and the two retrying the same
+        // broker at different rates would be a difference nobody chose.
         return new LazyResource<>("the kafka producer",
                 () -> new KafkaProducer<>(props),
-                producer -> producer.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)),
-                RETRY_INTERVAL_MILLIS, Clock.systemUTC());
+                producer -> producer.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)));
     }
 
     /** Wraps a producer a test supplied, so there is one path through this class. */
     private static LazyResource<Producer<String, byte[]>> alreadyOpen(
             Producer<String, byte[]> producer) {
         return new LazyResource<>("the injected producer", () -> producer,
-                open -> open.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)),
-                RETRY_INTERVAL_MILLIS, Clock.systemUTC());
+                open -> open.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)));
     }
 
     /**
@@ -131,6 +128,7 @@ public final class KafkaTelemetryForwarder implements TelemetryForwarder {
                         // Shutting down with no producer: waiting out the retry
                         // interval would only delay the stop, and there is
                         // nothing to deliver these records to.
+                        abandonQueue("the producer never opened");
                         return;
                     }
                     Thread.sleep(IDLE_WAIT_MILLIS);
@@ -143,9 +141,29 @@ public final class KafkaTelemetryForwarder implements TelemetryForwarder {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                abandonQueue("the sender thread was interrupted");
                 return;
             }
         }
+    }
+
+    /**
+     * Counts what the sender thread is about to walk away from.
+     *
+     * <p>Records still queued when this thread gives up are lost exactly as a
+     * full queue's are, so they are counted the same way. Leaving them out
+     * would let the run summary report a Kafka failure count lower than the
+     * number of readings that actually went missing — and a loss that is not
+     * visible is the one thing the bounded-queue design is meant to avoid.
+     */
+    private void abandonQueue(String why) {
+        int abandoned = pending.size();
+        if (abandoned == 0) {
+            return;
+        }
+        failures.add(abandoned);
+        System.err.println("dropped " + abandoned + " record(s) still queued for kafka: "
+                + why);
     }
 
     /**

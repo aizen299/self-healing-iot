@@ -24,6 +24,7 @@ constants arrive in Phase 6; gateway-facing event DTOs in Phases 3–4.
 | `Topics` | MQTT topic names following `fleet/{deviceId}/...`. |
 | `FleetException` and subtypes | Checked exception hierarchy. |
 | `ConfigurationException`, `Env` | Shared, fail-loud environment parsing so every module reports a bad value the same way. |
+| `LazyResource` | Holds a resource whose construction may fail — a Kafka producer — and retries on a monotonic timer rather than giving up. Used by the gateway's forwarder and the operator's publisher, which had the same build-once-at-startup bug. |
 
 ## Two deliberate choices
 

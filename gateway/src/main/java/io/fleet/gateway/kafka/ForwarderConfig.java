@@ -52,9 +52,14 @@ public record ForwarderConfig(
         // linger.ms + request.timeout.ms. The forwarder derives delivery
         // timeout from the request timeout alone, so a large linger with a
         // small request timeout produces a config the KafkaProducer
-        // constructor rejects — and since an unopenable forwarder falls back
-        // to the null object, the result would be a valid-looking setting that
-        // silently forwards nothing.
+        // constructor rejects.
+        //
+        // Caught here rather than left to that constructor, because the
+        // forwarder now retries a failed construction for ever instead of
+        // falling back to the null object: a setting that can never work would
+        // otherwise produce a line every ten seconds and no forwarding, which
+        // is louder than the old silence but no more correct. Retrying cannot
+        // tell "not up yet" from "never going to work"; this check can.
         long deliveryTimeout = Math.max(requestTimeoutMs * 2L, requestTimeoutMs + 1L);
         if (deliveryTimeout < (long) lingerMs + requestTimeoutMs) {
             throw new ConfigurationException(

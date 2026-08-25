@@ -1,8 +1,9 @@
 package io.fleet.common;
 
-import java.time.Clock;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -43,8 +44,16 @@ import java.util.function.Supplier;
  *
  * <p>Not thread-safe by accident: {@code get} and {@code close} are called
  * from different threads at both call sites (a sender thread and a shutdown
- * hook; a poll thread and main), so both are synchronized. The lock is
- * uncontended in the normal case and the work under it is a field read.
+ * hook; a poll thread and main), so both are synchronized.
+ *
+ * <p><b>The lock is held across {@code opener.get()}</b>, which for a Kafka
+ * producer means it is held across a constructor that resolves DNS. That is
+ * deliberate — releasing it would let two threads build two resources where
+ * only one gets stored, and the loser would never be closed — but it has a
+ * consequence worth stating: a {@code close()} racing an in-flight attempt
+ * waits for that attempt to finish. Bounded by however long the opener takes,
+ * which for an unresolvable address is immediate and for a slow resolver is
+ * not.
  *
  * @param <T> the resource type; no {@code AutoCloseable} bound, because both
  *            call sites need a <em>bounded</em> close rather than the
@@ -52,27 +61,57 @@ import java.util.function.Supplier;
  */
 public final class LazyResource<T> implements AutoCloseable {
 
+    /**
+     * How long to wait after a failed attempt, unless a caller says otherwise.
+     *
+     * <p>Lives here rather than in each call site so the gateway and the
+     * operator cannot end up retrying the same broker at different rates for
+     * no stated reason.
+     */
+    public static final long DEFAULT_RETRY_INTERVAL_MILLIS = 10_000L;
+
     private final String name;
     private final Supplier<T> opener;
     private final Consumer<T> closer;
-    private final long retryIntervalMillis;
-    private final Clock clock;
+    private final long retryIntervalNanos;
+    private final LongSupplier nanoTime;
 
     private final LongAdder openFailures = new LongAdder();
 
     private T resource;
-    private long nextAttemptMillis;
+    /**
+     * When the next attempt is allowed, on the monotonic timer.
+     *
+     * <p>{@code nanoTime} and not {@code Clock.millis()}, and the difference
+     * is not academic: a wall clock steps. An NTP correction or a VM
+     * resynchronising after the host sleeps can move it backwards by minutes,
+     * and this class would then refuse to retry for the length of the step —
+     * silently, because the attempt that would have logged never runs. The one
+     * thing it exists to guarantee is that it keeps trying.
+     *
+     * <p>{@code unset} rather than 0, because nanoTime's origin is arbitrary
+     * and may be negative, so 0 is not reliably "in the past".
+     */
+    private boolean attemptScheduled;
+    private long nextAttemptNanos;
     private boolean closed;
+
+    /** Retries every {@link #DEFAULT_RETRY_INTERVAL_MILLIS} on the system timer. */
+    public LazyResource(String name, Supplier<T> opener, Consumer<T> closer) {
+        this(name, opener, closer, DEFAULT_RETRY_INTERVAL_MILLIS, System::nanoTime);
+    }
 
     /**
      * @param name                what this holds, for log lines
      * @param opener              builds the resource; may throw
      * @param closer              releases it, and should be bounded in time
      * @param retryIntervalMillis how long to wait after a failed attempt
-     * @param clock               the clock the retry interval is measured on
+     * @param nanoTime            monotonic nanosecond source, normally
+     *                            {@code System::nanoTime}; a test supplies one
+     *                            it can move
      */
     public LazyResource(String name, Supplier<T> opener, Consumer<T> closer,
-            long retryIntervalMillis, Clock clock) {
+            long retryIntervalMillis, LongSupplier nanoTime) {
         if (retryIntervalMillis <= 0L) {
             throw new IllegalArgumentException(
                     "retry interval must be positive, got " + retryIntervalMillis);
@@ -80,8 +119,8 @@ public final class LazyResource<T> implements AutoCloseable {
         this.name = name;
         this.opener = opener;
         this.closer = closer;
-        this.retryIntervalMillis = retryIntervalMillis;
-        this.clock = clock;
+        this.retryIntervalNanos = TimeUnit.MILLISECONDS.toNanos(retryIntervalMillis);
+        this.nanoTime = nanoTime;
     }
 
     /**
@@ -89,16 +128,25 @@ public final class LazyResource<T> implements AutoCloseable {
      *
      * <p>At most one construction attempt per retry interval, so a caller on a
      * hot path can ask every time without turning an outage into a storm of
-     * connection attempts. The attempt runs on the calling thread — building a
-     * Kafka producer resolves DNS, so this must not be called from a thread
-     * that has to stay responsive.
+     * connection attempts.
+     *
+     * <p><b>The attempt runs on the calling thread</b> and takes as long as
+     * the opener does — for a Kafka producer, a constructor that resolves DNS.
+     * Each call site has to decide whether that is acceptable on the thread it
+     * calls from. The gateway answers by calling this only on its dedicated
+     * sender thread; the operator calls it from the consumer poll loop, where
+     * the budget is {@code max.poll.interval.ms} (300 s by default) and one
+     * resolution fits comfortably inside it.
      */
     public synchronized T get() {
         if (resource != null || closed) {
             return resource;
         }
-        long now = clock.millis();
-        if (now < nextAttemptMillis) {
+        long now = nanoTime.getAsLong();
+        // Subtraction, not `now < nextAttemptNanos`: nanoTime wraps, and the
+        // difference stays correct across the wrap where the comparison does
+        // not.
+        if (attemptScheduled && now - nextAttemptNanos < 0L) {
             return null;
         }
         try {
@@ -110,7 +158,8 @@ public final class LazyResource<T> implements AutoCloseable {
             return resource;
         } catch (RuntimeException e) {
             openFailures.increment();
-            nextAttemptMillis = now + retryIntervalMillis;
+            attemptScheduled = true;
+            nextAttemptNanos = now + retryIntervalNanos;
             // The cause, not just the message: KafkaProducer's constructor
             // reports "Failed to construct kafka producer" and puts the actual
             // reason — an unresolvable bootstrap address, a rejected setting —
@@ -122,7 +171,8 @@ public final class LazyResource<T> implements AutoCloseable {
             // second case findable. The interval is what keeps it bounded.
             Throwable cause = e.getCause() == null ? e : e.getCause();
             System.err.println("could not open " + name + ", retrying in "
-                    + retryIntervalMillis + " ms: " + e.getMessage() + " (" + cause + ")");
+                    + TimeUnit.NANOSECONDS.toMillis(retryIntervalNanos) + " ms: "
+                    + e.getMessage() + " (" + cause + ")");
             return null;
         }
     }

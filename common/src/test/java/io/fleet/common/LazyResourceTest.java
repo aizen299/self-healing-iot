@@ -3,12 +3,13 @@ package io.fleet.common;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -27,40 +28,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class LazyResourceTest {
 
-    private static final long T0 = 1_787_600_000_000L;
     private static final long RETRY_MILLIS = 10_000L;
 
-    /** A clock the test moves, so a retry interval costs no wall-clock time. */
-    private static final class MovableClock extends Clock {
-        private long millis = T0;
+    /**
+     * A monotonic timer the test moves, so a retry interval costs no
+     * wall-clock time.
+     *
+     * <p>Deliberately starts at a large negative value. {@code System.nanoTime}
+     * has an arbitrary origin and is explicitly allowed to be negative, so any
+     * implementation that treats 0 as "the beginning of time" or compares
+     * timestamps with {@code <} instead of subtracting is wrong — and would
+     * pass a test that started at zero.
+     */
+    private static final class MovableTimer implements LongSupplier {
+        private long nanos = -TimeUnit.HOURS.toNanos(3);
 
-        void advance(long by) {
-            millis += by;
+        void advance(long millis) {
+            nanos += TimeUnit.MILLISECONDS.toNanos(millis);
         }
 
         @Override
-        public long millis() {
-            return millis;
-        }
-
-        @Override
-        public Instant instant() {
-            return Instant.ofEpochMilli(millis);
-        }
-
-        @Override
-        public ZoneId getZone() {
-            return ZoneId.of("UTC");
-        }
-
-        @Override
-        public Clock withZone(ZoneId zone) {
-            return this;
+        public long getAsLong() {
+            return nanos;
         }
     }
 
-    private final MovableClock clock = new MovableClock();
-    private final List<String> closed = new ArrayList<>();
+    private final MovableTimer clock = new MovableTimer();
+    private final List<String> closed = Collections.synchronizedList(new ArrayList<>());
 
     private LazyResource<String> holding(java.util.function.Supplier<String> opener) {
         return new LazyResource<>("the thing", opener, closed::add, RETRY_MILLIS, clock);
@@ -217,6 +211,69 @@ class LazyResourceTest {
     }
 
     @Test
+    @DisplayName("a wall clock going backwards does not suspend retrying")
+    void survivesTimeMovingBackwards() {
+        // The reason the timer is nanoTime and not Clock.millis(). An NTP
+        // correction, or a VM resynchronising after the host sleeps, moves a
+        // wall clock backwards; measuring the retry interval on one would stop
+        // this class retrying for the length of the step — silently, because
+        // the attempt that logs never runs. A monotonic source cannot go
+        // backwards, so the only thing that can delay an attempt is the
+        // interval itself.
+        AtomicInteger attempts = new AtomicInteger();
+        LazyResource<String> resource = holding(() -> {
+            if (attempts.incrementAndGet() < 2) {
+                throw new IllegalStateException("not up yet");
+            }
+            return "kafka";
+        });
+
+        assertNull(resource.get());
+        // A monotonic timer only ever moves forward, however far the wall
+        // clock jumps, so the second attempt still happens on schedule.
+        clock.advance(RETRY_MILLIS);
+
+        assertEquals("kafka", resource.get());
+        assertEquals(2, attempts.get());
+    }
+
+    @Test
+    @DisplayName("a close racing an in-flight open still releases the resource")
+    void closeDuringOpenDoesNotLeak() throws Exception {
+        // The whole reason both methods are synchronized: get() runs on the
+        // sender or poll thread and close() on a shutdown path. A close that
+        // slipped past an in-flight attempt would leave a live producer with
+        // nobody holding a reference to it.
+        CountDownLatch opening = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        LazyResource<String> resource = holding(() -> {
+            opening.countDown();
+            try {
+                release.await(5L, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return "kafka";
+        });
+
+        Thread opener = new Thread(resource::get, "opener");
+        opener.start();
+        assertTrue(opening.await(5L, TimeUnit.SECONDS), "the opener never started");
+
+        Thread closer = new Thread(resource::close, "closer");
+        closer.start();
+        release.countDown();
+
+        opener.join(5_000L);
+        closer.join(5_000L);
+
+        assertFalse(resource.isOpen());
+        assertEquals(List.of("kafka"), closed,
+                "the resource opened, so close must have released it exactly once");
+        assertNull(resource.get(), "a closed holder must not open another");
+    }
+
+    @Test
     @DisplayName("a non-positive retry interval is refused")
     void refusesAnImpossibleInterval() {
         // Zero would mean an attempt per call, which is the storm the interval
@@ -225,5 +282,9 @@ class LazyResourceTest {
                 () -> new LazyResource<>("the thing", () -> "x", closed::add, 0L, clock));
         assertThrows(IllegalArgumentException.class,
                 () -> new LazyResource<>("the thing", () -> "x", closed::add, -1L, clock));
+
+        // The convenience constructor exists so call sites do not each name
+        // their own interval; it must agree with the documented default.
+        assertEquals(10_000L, LazyResource.DEFAULT_RETRY_INTERVAL_MILLIS);
     }
 }

@@ -13,7 +13,6 @@ import org.apache.kafka.common.serialization.StringSerializer;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.time.Clock;
 import java.time.Duration;
 import java.util.Properties;
 import java.util.concurrent.atomic.LongAdder;
@@ -60,9 +59,6 @@ public final class RecoveryPublisher implements AutoCloseable {
     /** Marks a record on {@code device.recovery} as a controller action. */
     public static final String RECORD_KIND = "recovery-action";
 
-    /** How long to wait after failing to build the producer before trying again. */
-    private static final long RETRY_INTERVAL_MILLIS = 10_000L;
-
     private final LazyResource<Producer<String, byte[]>> producer;
     private final JsonFactory json = new JsonFactory();
     private final LongAdder failures = new LongAdder();
@@ -77,8 +73,7 @@ public final class RecoveryPublisher implements AutoCloseable {
     /** Injectable producer, so the encoding can be tested with a MockProducer. */
     RecoveryPublisher(Producer<String, byte[]> producer) {
         this(new LazyResource<>("the injected producer", () -> producer,
-                open -> open.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)),
-                RETRY_INTERVAL_MILLIS, Clock.systemUTC()));
+                open -> open.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS))));
     }
 
     /** @param producer injected so a test can exercise the unavailable case */
@@ -87,9 +82,11 @@ public final class RecoveryPublisher implements AutoCloseable {
     }
 
     private static LazyResource<Producer<String, byte[]>> lazily(String name, Properties props) {
+        // Retry cadence comes from LazyResource, not from a constant here:
+        // the gateway holds the other producer, and the two retrying the same
+        // broker at different rates would be a difference nobody chose.
         return new LazyResource<>(name, () -> new KafkaProducer<>(props),
-                open -> open.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)),
-                RETRY_INTERVAL_MILLIS, Clock.systemUTC());
+                open -> open.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS)));
     }
 
     private static Properties producerProperties(OperatorConfig config) {

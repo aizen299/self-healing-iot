@@ -14,7 +14,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -169,7 +168,7 @@ class KafkaTelemetryForwarderTest {
                     }
                     return producer;
                 },
-                open -> open.close(Duration.ofSeconds(1)), 50L, Clock.systemUTC());
+                open -> open.close(Duration.ofSeconds(1)), 50L, System::nanoTime);
 
         try (KafkaTelemetryForwarder forwarder = new KafkaTelemetryForwarder(lazy, 64)) {
             byte[] wire = "{}".getBytes(StandardCharsets.UTF_8);
@@ -198,7 +197,7 @@ class KafkaTelemetryForwarderTest {
                 () -> {
                     throw new IllegalStateException("no resolvable bootstrap urls");
                 },
-                open -> open.close(Duration.ofSeconds(1)), 50L, Clock.systemUTC());
+                open -> open.close(Duration.ofSeconds(1)), 50L, System::nanoTime);
         KafkaTelemetryForwarder forwarder = new KafkaTelemetryForwarder(lazy, 64);
 
         byte[] wire = "{}".getBytes(StandardCharsets.UTF_8);
@@ -211,6 +210,34 @@ class KafkaTelemetryForwarderTest {
 
         assertTrue(elapsed < 1_500L,
                 "close must not sit through the retry interval; took " + elapsed + "ms");
+    }
+
+    @Test
+    @DisplayName("records abandoned at shutdown are counted, not silently dropped")
+    void countsWhatShutdownAbandons() throws Exception {
+        // Holding records for a broker that may still arrive is right while
+        // running; at shutdown they are lost. Losing them without counting
+        // would let the run summary report fewer Kafka failures than the
+        // number of readings that actually went missing, and a loss that is
+        // not visible is the one thing the bounded queue exists to avoid.
+        LazyResource<Producer<String, byte[]>> lazy = new LazyResource<>("a test producer",
+                () -> {
+                    throw new IllegalStateException("no resolvable bootstrap urls");
+                },
+                open -> open.close(Duration.ofSeconds(1)), 50L, System::nanoTime);
+        KafkaTelemetryForwarder forwarder = new KafkaTelemetryForwarder(lazy, 64);
+
+        byte[] wire = "{}".getBytes(StandardCharsets.UTF_8);
+        for (int i = 0; i < 5; i++) {
+            forwarder.forwardTelemetry("device-001", wire, 0, wire.length);
+        }
+        awaitUntil(() -> lazy.openFailureCount() > 0L);
+        assertEquals(0L, forwarder.forwardFailures(), "still queued, not yet lost");
+
+        forwarder.close();
+
+        assertEquals(5L, forwarder.forwardFailures(),
+                "every abandoned record must show up in the failure count");
     }
 
     private static void awaitUntil(BooleanSupplier condition) throws InterruptedException {
