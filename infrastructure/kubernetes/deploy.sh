@@ -7,6 +7,7 @@
 #   ./infrastructure/kubernetes/deploy.sh            base stack, no Kafka
 #   ./infrastructure/kubernetes/deploy.sh --kafka    with Kafka and the stream processor
 #   ./infrastructure/kubernetes/deploy.sh --recovery with Kafka and the recovery operator
+#   ./infrastructure/kubernetes/deploy.sh --monitoring  add Prometheus and Grafana
 #   ./infrastructure/kubernetes/deploy.sh --down     delete the cluster
 #
 # There is no registry. Images are built on the host and pushed into the kind
@@ -24,6 +25,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 
 WITH_KAFKA=false
 WITH_RECOVERY=false
+WITH_MONITORING=false
 for arg in "$@"; do
   case "$arg" in
     --kafka) WITH_KAFKA=true ;;
@@ -32,6 +34,11 @@ for arg in "$@"; do
     # and silently recovered nothing would be worse than one that pulls in
     # what it needs.
     --recovery) WITH_RECOVERY=true; WITH_KAFKA=true ;;
+    # Prometheus and Grafana. Composable with the others rather than implying
+    # them: the dashboard is worth having over the base stack alone, and the
+    # gateway's panels all work without Kafka. The operator's panels stay at
+    # zero until --recovery is on, which is honest rather than broken.
+    --monitoring) WITH_MONITORING=true ;;
     --down)
       kind delete cluster --name "$CLUSTER"
       exit 0
@@ -95,10 +102,19 @@ done
 # the manifests, so the two cannot drift apart.
 BROKER_IMAGE=eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
 KAFKA_IMAGE=apache/kafka@sha256:fbc7d7c428e3755cf36518d4976596002477e4c052d1f80b5b9eafd06d0fff2f
+# prom/prometheus:v3.1.0 and grafana/grafana:11.5.1, pinned by digest like the
+# rest. Between them they are about 1.1 GB of image — Grafana alone is larger
+# than Kafka — which is most of why monitoring is a flag rather than part of
+# base/.
+PROMETHEUS_IMAGE=prom/prometheus@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+GRAFANA_IMAGE=grafana/grafana@sha256:5781759b3d27734d4d548fcbaf60b1180dbf4290e708f01f292faa6ae764c5e6
 
 THIRD_PARTY=("$BROKER_IMAGE")
 if [ "$WITH_KAFKA" = true ]; then
   THIRD_PARTY+=("$KAFKA_IMAGE")
+fi
+if [ "$WITH_MONITORING" = true ]; then
+  THIRD_PARTY+=("$PROMETHEUS_IMAGE" "$GRAFANA_IMAGE")
 fi
 
 # Pulled inside the node, not side-loaded from the host. `kind load
@@ -148,6 +164,16 @@ fi
 if [ "$WITH_RECOVERY" = true ]; then
   "${KUBECTL[@]}" apply -f "$HERE/recovery/"
 fi
+if [ "$WITH_MONITORING" = true ]; then
+  "${KUBECTL[@]}" apply -f "$HERE/monitoring/"
+  # The dashboard has one copy in this repository — the JSON file — and this
+  # is what puts it in the cluster. monitoring/91-grafana.yaml deliberately
+  # does not carry a transcription of it: two copies of a 20-panel dashboard
+  # would disagree the first time one was edited.
+  "${KUBECTL[@]}" -n "$NAMESPACE" create configmap grafana-dashboards \
+    --from-file="fleet.json=$ROOT/infrastructure/monitoring/grafana/dashboards/fleet.json" \
+    --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f -
+fi
 
 say "waiting for the pipeline"
 "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/broker --timeout=300s
@@ -180,6 +206,13 @@ fi
 if [ "$WITH_RECOVERY" = true ]; then
   "${KUBECTL[@]}" -n "$NAMESPACE" rollout restart deployment/recovery-operator
 fi
+if [ "$WITH_MONITORING" = true ]; then
+  # Grafana only: it reads the dashboard ConfigMap at startup, so a dashboard
+  # edit needs a new pod. Prometheus is left alone — its config is reloaded
+  # through --web.enable-lifecycle and its series are worth keeping across a
+  # redeploy.
+  "${KUBECTL[@]}" -n "$NAMESPACE" rollout restart deployment/grafana
+fi
 
 say "waiting for the workloads"
 "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/gateway --timeout=180s
@@ -188,6 +221,10 @@ if [ "$WITH_KAFKA" = true ]; then
 fi
 if [ "$WITH_RECOVERY" = true ]; then
   "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/recovery-operator --timeout=240s
+fi
+if [ "$WITH_MONITORING" = true ]; then
+  "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/prometheus --timeout=300s
+  "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/grafana --timeout=300s
 fi
 "${KUBECTL[@]}" -n "$NAMESPACE" wait --for=condition=Ready pod \
   -l app=edge-device --timeout=300s
@@ -269,6 +306,28 @@ else
   cat <<EOF
 Nothing recreates it — that is Phase 8's point (ADR-010). Add --recovery to
 deploy the operator that does.
+
+EOF
+fi
+if [ "$WITH_MONITORING" = true ]; then
+  cat <<EOF
+Grafana is on http://127.0.0.1:13000 — anonymous, opening on the fleet
+dashboard. Prometheus is on http://127.0.0.1:19090 for when a panel says
+"No data" and you need to know whether the target is even up:
+
+  open http://127.0.0.1:13000
+  curl -s http://127.0.0.1:19090/api/v1/targets | grep -o '"health":"[a-z]*"'
+
+Nothing on that dashboard is a result. Only a run recorded under
+experiments/results/ supports a reported number.
+
+EOF
+else
+  cat <<EOF
+No dashboard: add --monitoring for Prometheus and Grafana. The gateway is
+already exposing everything they read:
+
+  curl -s http://127.0.0.1:18081/metrics | head -20
 
 EOF
 fi

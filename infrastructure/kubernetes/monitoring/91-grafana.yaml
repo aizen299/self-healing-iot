@@ -1,0 +1,186 @@
+# Grafana, provisioned from files so nothing has to be clicked.
+#
+# The datasource, the dashboard provider and the dashboard itself are all
+# ConfigMaps generated from infrastructure/monitoring/grafana/. A dashboard
+# built in the browser lives in Grafana's own database, where no diff can see
+# it and no clean checkout reproduces it — which would make it useless as part
+# of a project whose experiments have to be re-runnable.
+#
+# Anonymous access is on, with the Admin role. This is a single-node kind
+# cluster on a laptop reached over a NodePort; a login screen would buy
+# nothing and cost the demonstration a step. Do not copy this to anywhere
+# real.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: fleet
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: self-healing-fleet
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        # Fixed, not generated — the dashboard references this uid directly.
+        # See infrastructure/monitoring/grafana/provisioning/datasources/.
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.fleet.svc.cluster.local:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: 5s
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: fleet
+        orgId: 1
+        folder: Fleet
+        type: file
+        disableDeletion: false
+        # Off, so an edit made in the browser cannot become the real
+        # dashboard. The file in the repository is the dashboard.
+        allowUiUpdates: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: fleet
+  labels:
+    app: grafana
+spec:
+  type: NodePort
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      # kind maps this to the host's 13000.
+      nodePort: 30300
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: fleet
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: self-healing-fleet
+spec:
+  replicas: 1
+  # Recreate: one emptyDir holds Grafana's SQLite, and two processes opening
+  # it at once is how it gets corrupted.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+        app.kubernetes.io/part-of: self-healing-fleet
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The image runs as uid 472 and the emptyDir arrives root-owned.
+        # Without this Grafana cannot create grafana.db and crash-loops.
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana@sha256:5781759b3d27734d4d548fcbaf60b1180dbf4290e708f01f292faa6ae764c5e6
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Admin
+            - name: GF_AUTH_BASIC_ENABLED
+              value: "false"
+            # Straight onto the fleet dashboard. One less click between
+            # `deploy.sh --monitoring` and something worth looking at.
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /var/lib/grafana/dashboards/fleet.json
+            # Nothing here should be phoning home from a laptop.
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_INSTALL_PLUGINS
+              value: ""
+          ports:
+            - name: http
+              containerPort: 3000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+      volumes:
+        # The two provisioning directories are separate mounts of the same
+        # ConfigMap: Grafana reads every file in each, and one mount holding
+        # both would put the dashboard provider where the datasource loader
+        # looks and vice versa.
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: datasources.yml
+                path: datasources.yml
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: dashboards.yml
+                path: dashboards.yml
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+            # Optional, because this ConfigMap is not in this directory.
+            # deploy.sh creates it from
+            # infrastructure/monitoring/grafana/dashboards/fleet.json, so the
+            # dashboard has exactly one copy in the repository rather than a
+            # JSON file and a YAML transcription of it that can disagree.
+            #
+            # Without `optional` a plain `kubectl apply -f monitoring/` would
+            # leave this pod stuck in ContainerCreating on a missing volume.
+            # With it, Grafana comes up with the datasource provisioned and an
+            # empty Fleet folder — a state that explains itself.
+            optional: true
+        - name: data
+          emptyDir:
+            sizeLimit: 512Mi

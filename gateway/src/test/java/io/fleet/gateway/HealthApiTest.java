@@ -51,6 +51,39 @@ class HealthApiTest {
     }
 
     @Test
+    @DisplayName("/metrics answers the exposition format, not JSON")
+    void servesPrometheusMetrics() throws Exception {
+        registry.recordTelemetry(reading("device-001"), 1_000L);
+        metrics.telemetryAccepted();
+
+        HttpResponse<String> response = get("/metrics");
+
+        assertEquals(200, response.statusCode());
+        // Prometheus checks the version parameter; a plain text/plain scrape
+        // is accepted but a wrong version is not.
+        assertEquals("text/plain; version=0.0.4; charset=utf-8",
+                response.headers().firstValue("Content-Type").orElse(""));
+        assertTrue(response.body().contains("fleet_telemetry_accepted_total 1"),
+                response.body());
+        assertTrue(response.body().contains("# TYPE fleet_devices gauge"), response.body());
+    }
+
+    @Test
+    @DisplayName("/metrics answers while the broker is down")
+    void metricsDoNotDependOnReadiness() throws Exception {
+        // The scrape has to keep working through exactly the outage the
+        // dashboard is wanted for. /ready is 503 here — this must not be.
+        assertEquals(503, get("/ready").statusCode(),
+                "this fixture builds a HealthApi with no ingestor, so it is never ready");
+
+        HttpResponse<String> response = get("/metrics");
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("fleet_gateway_broker_connected 0"),
+                response.body());
+    }
+
+    @Test
     void healthReportsFleetCounters() throws Exception {
         registry.recordTelemetry(reading("device-001"), 1_000L);
         registry.recordPresence("device-001", Presence.ONLINE, 1_100L, policy);

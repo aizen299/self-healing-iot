@@ -93,6 +93,33 @@ nothing, or a negative result, which means the two pods' clocks disagree.
 | `OPERATOR_POLL_TIMEOUT_MS` | `1000` | How long a consumer poll waits |
 | `OPERATOR_REPLACE_LIVE_DEVICES` | `false` | Replace a device whose pod is still running |
 | `OPERATOR_RUN_DURATION_SECONDS` | `0` | `0` runs until interrupted |
+| `OPERATOR_METRICS_PORT` | `8080` | Prometheus scrape port; `0` binds an ephemeral one |
+
+## Metrics
+
+Phase 10 gave this process its first HTTP port, serving one route:
+`GET /metrics`, in Prometheus text exposition format.
+
+| Metric | Notes |
+|---|---|
+| `fleet_operator_recoveries_total{outcome}` | `REPLACED`, `ALREADY_RECOVERED`, `NOT_NEEDED`, `FAILED` |
+| `fleet_operator_detection_to_replacement_millis` | Summary — `_sum` and `_count` |
+| `fleet_operator_events_dropped_total{reason}` | `malformed`, `wrong_event_type` |
+| `fleet_operator_commit_failures_total` | Each one means a redelivery, which is safe |
+| `fleet_operator_publish_failures_total` | A recovery that happened but could not be announced |
+| `fleet_jvm_heap_used_bytes`, `fleet_jvm_threads` | This process |
+
+`ALREADY_RECOVERED` climbing is not a fault. It is a redelivered failure event
+creating nothing, which is the observable proof that recovery is idempotent.
+
+`fleet_operator_detection_to_replacement_millis` is **not MTTR** — see the
+section above. No metric name here contains the string, and a test asserts it.
+
+Still no probes. A scrape endpoint is not a health check: this one answers 200
+whether or not Kafka is reachable, because an operator that cannot consume is
+exactly what a dashboard needs to show, and a liveness probe reading it would
+restart the recovery path during a broker outage.
+
 
 ## Running it
 

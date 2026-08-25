@@ -1,0 +1,165 @@
+# Prometheus, and the Grafana beside it, applied separately — the same
+# argument the Kafka overlay makes.
+#
+# The base stack is a working self-healing fleet without a dashboard, and this
+# host has 8 GB with Docker's VM already holding about half (ADR-003). Two
+# more services is not free, so this stays out of `kubectl apply -f base/`:
+#
+#   ./infrastructure/kubernetes/deploy.sh --monitoring
+#
+# Prometheus scrapes the gateway through the **gateway-admin** Service, not
+# through `gateway`. Readiness withdraws the pod from `gateway` while the MQTT
+# connection is down, and with one replica there is no other backend — so a
+# broker outage would take the metrics away at exactly the moment someone
+# wanted to look at them (ADR-012).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: fleet
+  labels:
+    app: prometheus
+    app.kubernetes.io/part-of: self-healing-fleet
+data:
+  prometheus.yml: |
+    # The cluster's copy of infrastructure/monitoring/prometheus/prometheus.yml.
+    # Kept as a separate file rather than mounted from the repo because the
+    # targets are the one thing that really differs between Compose and
+    # Kubernetes: container names there, Service DNS here.
+    global:
+      # Fast for a demonstration. Detection runs on a one-second heartbeat and
+      # a recovery takes a couple of seconds, so a 60 s scrape would put the
+      # whole event between two samples.
+      scrape_interval: 5s
+      evaluation_interval: 15s
+      external_labels:
+        fleet: fleet-local
+        deployment: kubernetes
+
+    # Static targets, and no kubernetes_sd_configs. Service discovery would
+    # need a ServiceAccount with list/watch on pods and endpoints; there are
+    # three targets here and the manifests fix their names. Take the machinery
+    # when there is something for it to discover.
+    scrape_configs:
+      - job_name: gateway
+        metrics_path: /metrics
+        static_configs:
+          # gateway-admin, deliberately: publishNotReadyAddresses is true on
+          # it, so the scrape survives a broker outage.
+          - targets: ["gateway-admin.fleet.svc.cluster.local:8080"]
+            labels:
+              component: gateway
+
+      - job_name: recovery-operator
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["recovery-operator.fleet.svc.cluster.local:8080"]
+            labels:
+              component: recovery-operator
+
+      - job_name: prometheus
+        static_configs:
+          - targets: ["localhost:9090"]
+            labels:
+              component: prometheus
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: fleet
+  labels:
+    app: prometheus
+spec:
+  type: NodePort
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+      # kind maps this to the host's 19090.
+      nodePort: 30090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: fleet
+  labels:
+    app: prometheus
+    app.kubernetes.io/part-of: self-healing-fleet
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: the series live on one emptyDir and two
+  # Prometheis writing the same directory corrupt it. There is no HA story
+  # here and none is wanted — losing a demonstration's samples to a restart is
+  # cheaper than running two.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        app.kubernetes.io/part-of: self-healing-fleet
+    spec:
+      # Nothing here talks to the API server — the scrape targets are static —
+      # so the token would be a credential sitting in a pod for no reason.
+      automountServiceAccountToken: false
+      securityContext:
+        # The upstream image runs as nobody (65534) and the emptyDir below is
+        # created root-owned. Without this, Prometheus cannot write its TSDB
+        # and crash-loops on "permission denied" at open.
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: prom/prometheus@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            # Short on purpose. This is a demonstration surface, not the
+            # system of record: experiments/results/ is where a number that
+            # matters gets written down.
+            - --storage.tsdb.retention.time=6h
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        # emptyDir, not a PVC. The retention above is six hours and the whole
+        # point of the reproducibility contract is that a dashboard is not
+        # evidence — a run that matters is recorded under experiments/.
+        - name: data
+          emptyDir:
+            sizeLimit: 1Gi

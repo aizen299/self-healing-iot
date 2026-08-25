@@ -98,18 +98,51 @@ spec:
                   key: FLEET_DEVICE_ID_PREFIX
             - name: JAVA_OPTS
               value: -XX:MaxRAMPercentage=75
+          ports:
+            - name: http
+              containerPort: 8080
           resources:
             requests:
               cpu: 100m
               memory: 128Mi
             limits:
               memory: 320Mi
-          # No HTTP endpoint to probe, and adding a server to this process
-          # purely to have something to probe would be a worse trade than
-          # going without: the operator has one job, and a process that cannot
-          # reach Kafka or the API server exits rather than idling.
+          # Still no probes, and now that is a choice rather than an
+          # absence: Phase 10 gave this process an HTTP port, so one could be
+          # written. A scrape endpoint is not a health check. It answers 200
+          # whether or not Kafka is reachable, on purpose — an operator that
+          # cannot consume is precisely what the dashboard needs to show, and
+          # a liveness probe reading the same endpoint would restart the
+          # recovery path during a broker outage for no gain. The Deployment
+          # already restarts a process that exits.
           #
           # The startup check in Main is the real gate — it lists pods once
           # and fails loudly, so a missing RBAC rule is a crash-loop visible in
           # `kubectl get pods` rather than a recovery that silently never
           # happens.
+---
+# A Service for one consumer: Prometheus.
+#
+# ClusterIP, not NodePort. Nothing outside the cluster has a reason to read
+# the operator's counters directly — Grafana is the way in, and it reaches
+# them through Prometheus.
+apiVersion: v1
+kind: Service
+metadata:
+  name: recovery-operator
+  namespace: fleet
+  labels:
+    app: recovery-operator
+    app.kubernetes.io/part-of: self-healing-fleet
+spec:
+  type: ClusterIP
+  # The operator has no readiness probe, so it is always "ready" and this
+  # would be redundant — set anyway, so that adding a probe later cannot
+  # silently take the scrape away during exactly the outage it reports on.
+  publishNotReadyAddresses: true
+  selector:
+    app: recovery-operator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

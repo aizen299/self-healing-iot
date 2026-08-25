@@ -42,3 +42,15 @@ nodes:
       - containerPort: 30883
         hostPort: 11883
         protocol: TCP
+      # Grafana, on 13000 rather than 3000. Nothing is known to hold 3000 on
+      # this machine, but Jenkins on 8080 is the reason every other mapping
+      # here is shifted, and one convention beats two.
+      - containerPort: 30300
+        hostPort: 13000
+        protocol: TCP
+      # Prometheus, for reading raw series and checking that targets are up
+      # when a panel says No data. Grafana is the intended way in; this is the
+      # way to find out why Grafana is empty.
+      - containerPort: 30090
+        hostPort: 19090
+        protocol: TCP

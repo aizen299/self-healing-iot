@@ -12,6 +12,7 @@
 # Kafka is the heaviest service here by a wide margin. Leave it out unless the
 # phase under test needs it: the gateway runs without it and says so.
 #   docker compose up --scale fleet=3      three independent fleets
+#   docker compose --profile monitoring up  the stack plus Prometheus and Grafana
 #   ./infrastructure/docker/smoke-test.sh  build and verify without leaving one up
 #
 # The gateway is published on 18080, not 8080: Jenkins already holds 8080 on
@@ -198,7 +199,71 @@ services:
     stop_grace_period: 30s
     restart: "no"
 
+  # Prometheus and Grafana, behind a profile so they do not start with a plain
+  # `docker compose up`.
+  #
+  # A profile and not just "leave them out of the command line", which is how
+  # Kafka is handled a few services up. The two are about 1.1 GB of image
+  # between them — Grafana alone is larger than Kafka — and unlike Kafka they
+  # are not something a later phase's tests will want by default. Kafka
+  # predates this and could reasonably get the same treatment; changing it now
+  # would break commands three other documents give.
+  prometheus:
+    # prom/prometheus:v3.1.0 — pinned by digest, like everything else here.
+    image: prom/prometheus@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+    container_name: fleet-prometheus
+    profiles: ["monitoring"]
+    depends_on:
+      - gateway
+    ports:
+      # 19090, matching the kind mapping, so one number works either way.
+      - "19090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Six hours. This is a demonstration surface, not the system of record —
+      # experiments/results/ is where a number that matters gets written down.
+      - --storage.tsdb.retention.time=6h
+      - --web.enable-lifecycle
+    volumes:
+      - ./infrastructure/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    mem_limit: 512m
+    restart: unless-stopped
+
+  grafana:
+    # grafana/grafana:11.5.1 — pinned by digest.
+    image: grafana/grafana@sha256:5781759b3d27734d4d548fcbaf60b1180dbf4290e708f01f292faa6ae764c5e6
+    container_name: fleet-grafana
+    profiles: ["monitoring"]
+    depends_on:
+      - prometheus
+    ports:
+      # 13000 rather than 3000, matching the kind mapping.
+      - "13000:3000"
+    environment:
+      # Anonymous, with the Admin role. A laptop demonstration behind a
+      # published port; a login screen would cost a step and buy nothing. Not
+      # a pattern to copy anywhere real.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/fleet.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      # Read-only mounts of the same files the Kubernetes overlay puts in
+      # ConfigMaps. The dashboard has one copy in this repository and both
+      # deployments read it.
+      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    mem_limit: 384m
+    restart: unless-stopped
+
 volumes:
   # Named rather than a bind mount: the history survives a rebuild, and the
   # container's non-root user owns it without fighting host permissions.
   gateway-data:
+  prometheus-data:
+  grafana-data:

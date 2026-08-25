@@ -58,6 +58,8 @@ public final class RecoveryController {
      * running, not what was last concluded.
      */
     private final Map<String, Recovery> lastReplacement = new ConcurrentHashMap<>();
+    private final LongAdder replacementDurationTotalMillis = new LongAdder();
+    private final LongAdder replacementDurationSamples = new LongAdder();
 
     private final LongAdder replaced = new LongAdder();
     private final LongAdder duplicates = new LongAdder();
@@ -258,6 +260,14 @@ public final class RecoveryController {
         if (recovery.outcome() == RecoveryOutcome.REPLACED) {
             lastReplacement.put(recovery.deviceId(), recovery);
         }
+        // Only the ones that measured something. An outcome that replaced
+        // nothing spans a failure this recovery did not answer, and a negative
+        // result means the gateway's clock and this one disagree — the same
+        // test the publisher applies before writing the field at all.
+        if (recovery.hasMeaningfulDuration()) {
+            replacementDurationTotalMillis.add(recovery.durationMillis());
+            replacementDurationSamples.increment();
+        }
         return recovery;
     }
 
@@ -285,5 +295,23 @@ public final class RecoveryController {
 
     public long failedCount() {
         return failed.sum();
+    }
+
+    /**
+     * Total detection-to-replacement time, over the recoveries that measured
+     * one.
+     *
+     * <p><b>Not MTTR and never to be added to it.</b> This ends when the API
+     * server accepts the pod; the gateway's recoveryDurationMillis starts at
+     * the same instant, ends when heartbeats are confirmed, and already
+     * contains this. MTTR is the gateway's number.
+     */
+    public long replacementDurationTotalMillis() {
+        return replacementDurationTotalMillis.sum();
+    }
+
+    /** How many replacements contributed a duration, which is not all of them. */
+    public long replacementDurationSampleCount() {
+        return replacementDurationSamples.sum();
     }
 }

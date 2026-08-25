@@ -129,6 +129,16 @@ itself rather than relying on someone remembering to check a log.
 | `GET /devices/{id}` | One device, or 404 |
 | `GET /history?device=<id>&from=<ms>&to=<ms>` | Stored readings for a device |
 | `GET /stats?from=<ms>&to=<ms>` | Fleet average, telemetry rate, failures, mean recovery |
+| `GET /metrics` | Prometheus text exposition — the only route that is not JSON |
+
+`/metrics` is Phase 10's. It renders what `GatewayMetrics` and
+`DeviceRegistry` already count, plus five numbers off the JVM's MXBeans, and
+stores nothing of its own. Scrape it through the **admin** Service (18081),
+not the readiness-gated one — see
+[ADR-012](../docs/decisions/ADR-012-observability-shape.md). It also reads
+nothing from the store, so unlike `/history` and `/stats` it cannot answer
+503.
+
 
 `/health` and `/ready` are separate because they answer different
 questions, and Kubernetes asks both. `/health` is 200 whenever the process

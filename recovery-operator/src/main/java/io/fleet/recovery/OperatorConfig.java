@@ -31,7 +31,8 @@ public record OperatorConfig(
         int apiTimeoutSeconds,
         long pollTimeoutMillis,
         boolean replaceLiveDevices,
-        long runDurationSeconds) {
+        long runDurationSeconds,
+        int metricsPort) {
 
     public OperatorConfig {
         if (bootstrapServers == null || bootstrapServers.isBlank()) {
@@ -57,6 +58,12 @@ public record OperatorConfig(
         if (runDurationSeconds < 0) {
             throw new ConfigurationException(
                     "OPERATOR_RUN_DURATION_SECONDS must be >= 0, got " + runDurationSeconds);
+        }
+        // 0 is allowed and means an ephemeral port, which is how a test binds
+        // without racing another one for a fixed number.
+        if (metricsPort < 0 || metricsPort > 65_535) {
+            throw new ConfigurationException(
+                    "OPERATOR_METRICS_PORT must be between 0 and 65535, got " + metricsPort);
         }
     }
 
@@ -86,6 +93,9 @@ public record OperatorConfig(
                 // false positive into a real outage. On only for the wedged
                 // case, where the process lives and the heartbeat has stopped.
                 Env.booleanValue(env, "OPERATOR_REPLACE_LIVE_DEVICES", false),
-                Env.longValue(env, "OPERATOR_RUN_DURATION_SECONDS", 0L));
+                Env.longValue(env, "OPERATOR_RUN_DURATION_SECONDS", 0L),
+                // The same port the gateway serves on, because it is a
+                // different pod. One number to remember rather than two.
+                Env.intValue(env, "OPERATOR_METRICS_PORT", 8080));
     }
 }

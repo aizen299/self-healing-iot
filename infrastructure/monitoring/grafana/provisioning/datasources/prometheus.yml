@@ -1,0 +1,22 @@
+# Provisioned, not clicked. A dashboard that has to be wired to a data source
+# by hand after every `docker compose up` is not a reproducible artefact, and
+# this project's experiments have to be re-runnable from a clean checkout.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # Fixed, not generated. The dashboard references this uid directly rather
+    # than through a datasource template variable: a variable has to resolve
+    # to something at load time, and a provisioned dashboard that opens on an
+    # unresolved one shows "No data" on every panel with nothing to say why.
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    # Service name in Kubernetes, container name in Compose — the same string
+    # resolves in both, which is why this file is not duplicated the way
+    # prometheus.yml is.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 5s

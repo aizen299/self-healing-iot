@@ -1,7 +1,9 @@
 # Gateway HTTP API
 
-Read-only, JSON, no authentication. Served by the JDK's own `HttpServer`
-rather than a framework ([ADR-005](../decisions/ADR-005-gateway-dependencies-and-http.md)).
+Read-only, no authentication. Served by the JDK's own `HttpServer` rather
+than a framework ([ADR-005](../decisions/ADR-005-gateway-dependencies-and-http.md)).
+JSON everywhere except `/metrics`, which answers the Prometheus text
+exposition format.
 
 Bound to `127.0.0.1:8080` by default; the container images set
 `GATEWAY_HTTP_HOST=0.0.0.0`, Compose publishes it on **18080**, and the kind
@@ -108,3 +110,69 @@ incomplete window is that every answer says so
 `/history` caps results at 5000 rows: the whole result is materialised and
 serialised in memory before a byte is written, and the gateway's footprint
 is something the experiments measure.
+
+## `GET /metrics` — Prometheus exposition
+
+`Content-Type: text/plain; version=0.0.4; charset=utf-8`. Written by hand
+rather than by a client library
+([ADR-012](../decisions/ADR-012-observability-shape.md)): every number here
+was already counted by `GatewayMetrics` or `DeviceRegistry`, and the exporter
+reads them at scrape time without storing anything of its own.
+
+**Scrape this through 18081, not 18080.** Readiness withdraws the pod from the
+`gateway` Service during a broker outage, and with one replica that leaves no
+endpoint at all — the metrics would go dark at exactly the moment they mattered.
+`gateway-admin` sets `publishNotReadyAddresses: true`. For the same reason
+`/metrics` reads nothing from the store, so it cannot answer 503 the way
+`/history` and `/stats` can.
+
+| Metric | Type | Notes |
+|---|---|---|
+| `fleet_devices_known` | gauge | **Includes retained-presence ghosts.** Not fleet size |
+| `fleet_devices_reporting` | gauge | Devices the gateway has actually heard from |
+| `fleet_devices{state}` | gauge | Every state is emitted, including the zeroes |
+| `fleet_device_up{device_id}` | gauge | 1 when `ONLINE` — the "which one" panel |
+| `fleet_telemetry_accepted_total` | counter | |
+| `fleet_telemetry_rejected_total{reason}` | counter | `malformed` (would not parse) vs `invalid` (impossible values) |
+| `fleet_heartbeats_accepted_total` | counter | Should track the telemetry rate (ADR-006) |
+| `fleet_heartbeats_malformed_total` | counter | |
+| `fleet_presence_events_total` | counter | |
+| `fleet_presence_invalid_total` | counter | Our own device speaking an unrecognised protocol |
+| `fleet_messages_unroutable_total` | counter | Someone else in the fleet topic space |
+| `fleet_failures_detected_total` | counter | Pillar B |
+| `fleet_recoveries_observed_total` | counter | Pillar B |
+| `fleet_recovery_duration_millis` | histogram | **This is MTTR.** Detection to confirmed heartbeats |
+| `fleet_gateway_broker_connected` | gauge | 1/0 |
+| `fleet_gateway_connection_losses_total` | counter | |
+| `fleet_gateway_handler_errors_total` | counter | Should stay zero |
+| `fleet_gateway_monitor_errors_total` | counter | Non-zero means detection stalled |
+| `fleet_gateway_event_publish_failures_total` | counter | |
+| `fleet_gateway_store_errors_total` | counter | History is lossy when this moves |
+| `fleet_gateway_kafka_forward_failures_total` | counter | Includes a full forwarder queue |
+| `fleet_jvm_heap_used_bytes` | gauge | The **gateway's** JVM |
+| `fleet_jvm_heap_max_bytes` | gauge | `-1` when undefined |
+| `fleet_jvm_gc_collections_total{gc}` | counter | |
+| `fleet_jvm_gc_time_millis_total{gc}` | counter | |
+| `fleet_jvm_threads` | gauge | |
+
+Histogram bounds are 500 ms, 1 s, 2 s, 5 s, 10 s, 30 s, 60 s, `+Inf`.
+`fleet_recovery_duration_millis_count` counts only the recoveries that
+produced a measurable duration, which is fewer than
+`fleet_recoveries_observed_total` when the gateway's clock and the operator's
+disagree — a `_count` larger than the `+Inf` bucket would be an inconsistent
+histogram.
+
+The JVM series carry the `fleet_` prefix on purpose. `jvm_memory_used_bytes`
+would claim compatibility with the Micrometer schema a community dashboard
+expects, and these are five numbers off the MXBeans. Pillar A's
+constrained-versus-naive comparison is measured on the **device** JVM by the
+experiment harness, not scraped here.
+
+The recovery operator exposes its own `/metrics` on port 8080 with
+`fleet_operator_*` series. Its
+`fleet_operator_detection_to_replacement_millis` is a *component* of MTTR, not
+MTTR — it ends when the API server accepts the pod, and the gateway's
+histogram already contains it. **The two must never be added.**
+
+Nothing served here is a result. Only a run recorded under
+`experiments/results/` supports a reported number.
