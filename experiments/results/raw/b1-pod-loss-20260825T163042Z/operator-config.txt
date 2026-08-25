@@ -1,0 +1,9 @@
+=== recovery operator (Phase 9) ===
+kafka             : kafka-0.kafka.fleet.svc.cluster.local:9092
+consumer group    : fleet-recovery-operator
+namespace         : fleet
+device app label  : edge-device
+device id prefix  : device
+replace live pods : false
+run duration      : until interrupted
+jvm               : OpenJDK 64-Bit Server VM 21.0.12

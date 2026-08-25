@@ -1,0 +1,11 @@
+=== edge-device simulator (Phase 2) ===
+variant           : CONSTRAINED
+sink              : MQTT (tcp://broker:1883, QoS 0)
+devices           : 1
+publish interval  : 1000 ms
+run duration      : 86400 s
+failure mode      : NONE
+seed              : 42
+jvm               : OpenJDK 64-Bit Server VM 21.0.12
+max heap          : 61.9 MiB
+collectors        : Copy, MarkSweepCompact

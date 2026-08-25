@@ -1,0 +1,9 @@
+=== gateway (Phase 3) ===
+broker            : tcp://broker:1883
+client id         : fleet-gateway
+subscription QoS  : 1
+heartbeat expected: every 1000 ms
+suspect / offline : 2 / 4 missed heartbeats
+recovery confirms : 2 heartbeats
+run duration      : until interrupted
+jvm               : OpenJDK 64-Bit Server VM 21.0.12
