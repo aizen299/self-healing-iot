@@ -1,0 +1,48 @@
+# What Prometheus scrapes, for the Compose stack.
+#
+# The Kubernetes overlay carries its own copy of this file in a ConfigMap
+# rather than mounting this one: the target addresses are the one thing that
+# genuinely differs between the two deployments (container names here, Service
+# DNS there), and a single file with both sets would have half of it always
+# wrong.
+#
+# Deliberately static targets, and no kubernetes_sd_configs even in the
+# cluster. Service discovery needs RBAC to list pods and endpoints, and this
+# stack has four scrape targets whose names are fixed by the manifests. The
+# same argument as ADR-011: take the machinery when there is something for it
+# to discover.
+
+global:
+  # Fast for a demonstration, not for production. Failure detection here runs
+  # on a one-second heartbeat and a recovery takes a couple of seconds, so a
+  # 60 s scrape would put the whole event between two samples and the
+  # dashboard would show a fleet that never broke.
+  scrape_interval: 5s
+  evaluation_interval: 15s
+  external_labels:
+    fleet: fleet-local
+    deployment: compose
+
+scrape_configs:
+  - job_name: gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8080"]
+        labels:
+          component: gateway
+
+  - job_name: recovery-operator
+    metrics_path: /metrics
+    static_configs:
+      # Not in the Compose stack — the operator needs a Kubernetes API server
+      # to recover anything, so it only runs under the kind overlay. Left
+      # declared and empty so the two prometheus.yml files stay comparable.
+      - targets: []
+        labels:
+          component: recovery-operator
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          component: prometheus

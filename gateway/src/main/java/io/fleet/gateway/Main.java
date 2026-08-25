@@ -52,7 +52,12 @@ public final class Main {
              // broker connection is up, so a Kubernetes Service does not
              // route to a gateway that is running but recording nothing.
              HealthApi api = new HealthApi(config, registry, metrics, store,
-                     ingestor::isConnected)) {
+                     ingestor::isConnected,
+                     // The exporter is built here rather than inside HealthApi
+                     // because the forwarder's drop count lives on the
+                     // forwarder, and this is the only place that has both.
+                     new MetricsExporter(registry, metrics, ingestor::isConnected,
+                             forwarder::forwardFailures))) {
 
             // Closes the cycle described on MqttIngestor.onTransition: the
             // monitor announces what the ingestor observes, and publishes
@@ -64,7 +69,7 @@ public final class Main {
             maintenance.start();
             api.start();
             System.out.printf(Locale.ROOT, "health API on http://%s:%d/health (readiness"
-                            + " at /ready)%n",
+                            + " at /ready, metrics at /metrics)%n",
                     config.httpHost(), api.port());
 
             // The hook waits for the main thread to finish shutting down.

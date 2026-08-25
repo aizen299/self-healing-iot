@@ -31,10 +31,11 @@ comments) unless it was produced by an actual recorded experiment run in
 
 ## Current status
 
-**Phases 1–9 complete — a self-healing fleet.** A device that dies is
-detected, replaced, and back online with nobody touching it. Phase 7 was taken before Phase 6 (ADR-008): Kafka
-and a real TSDB both need a server, and containers supply them. The phase
-numbers still identify the work, but no longer its order.
+**Phases 1–10 complete — a self-healing fleet you can watch.** A device that
+dies is detected, replaced, and back online with nobody touching it, and
+Prometheus and Grafana show it happening. Phase 7 was taken before Phase 6
+(ADR-008): Kafka and a real TSDB both need a server, and containers supply
+them. The phase numbers still identify the work, but no longer its order.
 Every module is implemented and tested.
 
 Build is **Maven** (no Gradle). The JVM is pinned to HotSpot OpenJDK 21
@@ -64,6 +65,11 @@ builds, side-loads (there is no registry), applies, and waits:
 ```bash
 ./infrastructure/kubernetes/deploy.sh
 ```
+
+`--kafka`, `--recovery` and `--monitoring` compose. `--monitoring` adds
+Prometheus and Grafana (13000 and 19090); it needs the cluster recreated,
+because `kind` cannot add port mappings to a running node. The two images are
+about 1.1 GB between them, which is why they are a flag.
 
 Kubernetes changes the fleet's shape, deliberately: one device per pod, as
 **bare Pods with `restartPolicy: Never`** (ADR-010). A Deployment would
@@ -112,7 +118,8 @@ verified with a broker running. The wire contract is
 `docs/api/mqtt-topics.md`.
 
 The gateway ingests, validates, serves fleet state on an HTTP API, and
-detects failures. `/health` and `/ready` answer different questions and
+detects failures. `/health`, `/ready` and `/metrics` all answer different
+questions. `/health` and `/ready` answer different questions and
 both are needed: `/health` is 200 while the process lives (liveness — a
 broker outage must not restart the gateway), `/ready` is 503 until the
 broker connection is up (readiness — nothing should route to a gateway
@@ -122,6 +129,15 @@ during an outage. Two detection paths, deliberately: the broker's Last Will
 for a device that dies or disconnects, and a heartbeat timeout for one that
 stays connected but wedges — telemetry is **not** treated as proof of life,
 or that second case would be undetectable (ADR-006).
+
+`/metrics` is Prometheus exposition, hand-written rather than taken from a
+client library (ADR-012) — every number on it was already counted by
+`GatewayMetrics` before Phase 10. **Scrape it through `gateway-admin`**
+(18081), never through `gateway`: readiness withdraws the latter during a
+broker outage, which is exactly when the dashboard matters. The recovery
+operator exposes its own on 8080. Nothing on the dashboard is a result — the
+reproducibility contract below is unchanged, and a Grafana screenshot is
+precisely the artefact that gets mistaken for one.
 
 A device never heard from stays `UNKNOWN` and is never declared failed,
 which is what keeps retained-presence ghosts out of the recovery path.
@@ -236,7 +252,10 @@ a library the moment it needs watches, informers, or CRDs.
 Two durations exist and **must never be added**: the operator's
 `detectionToReplacementMillis` ends when the API server accepts the pod, the
 gateway's `recoveryDurationMillis` ends when heartbeats are confirmed and
-already contains it. MTTR is the gateway's number.
+already contains it. MTTR is the gateway's number. On the dashboard they are
+`fleet_operator_detection_to_replacement_millis` and
+`fleet_recovery_duration_millis`; no operator metric is named for MTTR, and a
+test asserts that.
 
 ## Repository layout
 
@@ -254,7 +273,7 @@ duplicate the wire format.
 | `infrastructure/docker/` | Per-module Dockerfiles + root `docker-compose.yml` for the full local stack |
 | `infrastructure/kubernetes/` | Manifests for kind/Minikube: Deployments, ConfigMaps, probes, RBAC. Workload labels (`app=edge-device`, `device-id=...`, `fleet-id=...`) are how the recovery operator identifies/replaces workloads |
 | `infrastructure/helm/` | Optional, only if it simplifies later GitOps/ArgoCD phase |
-| `infrastructure/monitoring/` | Prometheus scrape config, Grafana dashboards (fleet health, failed devices, MTTR, telemetry rate, gateway load) |
+| `infrastructure/monitoring/` | Prometheus scrape config and Grafana provisioning. `grafana/dashboards/fleet.json` is the dashboard and the only copy of it — `deploy.sh` builds the ConfigMap from that file |
 | `experiments/` | `configs/`, `scripts/`, `results/{raw,processed}/` — see reproducibility contract below |
 | `docs/decisions/` | ADRs (numbered `ADR-NNN-*.md`) for major architecture decisions |
 | `docs/architecture/`, `docs/api/`, `docs/experiments/` | Architecture docs, gateway API docs, experiment writeups — written to describe what exists, not what's planned |

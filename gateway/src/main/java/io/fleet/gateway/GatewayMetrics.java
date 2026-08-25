@@ -12,6 +12,19 @@ import java.util.concurrent.atomic.LongAdder;
  */
 public final class GatewayMetrics {
 
+    /**
+     * Upper bounds, in milliseconds, of the recovery-duration histogram.
+     *
+     * <p>Placed around what this fleet actually does: detection is a few
+     * missed heartbeats and a replacement is a JVM start, so recoveries land
+     * in the low seconds. Buckets far below that would all be empty and
+     * buckets far above would put every recovery in one, which is the same as
+     * not having a histogram. The implicit +Inf bucket above 60 s is where a
+     * recovery that went wrong shows up.
+     */
+    private static final long[] RECOVERY_BUCKET_BOUNDS_MILLIS =
+            {500L, 1_000L, 2_000L, 5_000L, 10_000L, 30_000L, 60_000L};
+
     private final LongAdder telemetryAccepted = new LongAdder();
     private final LongAdder telemetryMalformed = new LongAdder();
     private final LongAdder telemetryInvalid = new LongAdder();
@@ -25,6 +38,9 @@ public final class GatewayMetrics {
     private final LongAdder failuresDetected = new LongAdder();
     private final LongAdder recoveriesObserved = new LongAdder();
     private final LongAdder recoveryDurationTotalMillis = new LongAdder();
+    private final LongAdder recoveryDurationSamples = new LongAdder();
+    /** One more slot than there are bounds: the last is the +Inf overflow. */
+    private final LongAdder[] recoveryBuckets = newBuckets();
     private final LongAdder monitorErrors = new LongAdder();
     private final LongAdder eventPublishFailures = new LongAdder();
     private final LongAdder storeErrors = new LongAdder();
@@ -94,9 +110,67 @@ public final class GatewayMetrics {
      */
     public void recoveryObserved(long durationMillis) {
         recoveriesObserved.increment();
-        if (durationMillis > 0L) {
-            recoveryDurationTotalMillis.add(durationMillis);
+        if (durationMillis <= 0L) {
+            // Not a measurement. The two ends can come from clocks that
+            // disagree, and a zero or negative interval would drag the mean
+            // down while claiming to be a recovery that took no time.
+            //
+            // Counted separately from recoveriesObserved for exactly that
+            // reason: dividing the duration total by the number of recoveries
+            // would divide by a count that includes the ones excluded here.
+            return;
         }
+        recoveryDurationTotalMillis.add(durationMillis);
+        recoveryDurationSamples.increment();
+        recoveryBuckets[bucketFor(durationMillis)].increment();
+    }
+
+    private static LongAdder[] newBuckets() {
+        LongAdder[] buckets = new LongAdder[RECOVERY_BUCKET_BOUNDS_MILLIS.length + 1];
+        for (int i = 0; i < buckets.length; i++) {
+            buckets[i] = new LongAdder();
+        }
+        return buckets;
+    }
+
+    private static int bucketFor(long durationMillis) {
+        for (int i = 0; i < RECOVERY_BUCKET_BOUNDS_MILLIS.length; i++) {
+            if (durationMillis <= RECOVERY_BUCKET_BOUNDS_MILLIS[i]) {
+                return i;
+            }
+        }
+        return RECOVERY_BUCKET_BOUNDS_MILLIS.length;
+    }
+
+    /** The histogram's {@code le} bounds, in milliseconds. */
+    public long[] recoveryBucketBoundsMillis() {
+        return RECOVERY_BUCKET_BOUNDS_MILLIS.clone();
+    }
+
+    /**
+     * How many recoveries fell in each bucket, <em>not</em> cumulative, with
+     * the overflow above the last bound in the final slot.
+     *
+     * <p>Prometheus wants cumulative counts; accumulating them is the
+     * exporter's arithmetic. Keeping the raw counts here means this class does
+     * not have to know what format it is being read into.
+     */
+    public long[] recoveryBucketCounts() {
+        long[] counts = new long[recoveryBuckets.length];
+        for (int i = 0; i < counts.length; i++) {
+            counts[i] = recoveryBuckets[i].sum();
+        }
+        return counts;
+    }
+
+    /** Total of the durations that were measurable. */
+    public long recoveryDurationTotalMillis() {
+        return recoveryDurationTotalMillis.sum();
+    }
+
+    /** How many recoveries contributed a duration, which is not all of them. */
+    public long recoveryDurationSampleCount() {
+        return recoveryDurationSamples.sum();
     }
 
     /** The health sweep threw. Should stay zero; non-zero means detection stalled. */
@@ -148,7 +222,7 @@ public final class GatewayMetrics {
      * only a run recorded under experiments/ counts as one.
      */
     public long meanRecoveryMillis() {
-        long count = recoveriesObserved.sum();
+        long count = recoveryDurationSamples.sum();
         return count == 0L ? -1L : recoveryDurationTotalMillis.sum() / count;
     }
 

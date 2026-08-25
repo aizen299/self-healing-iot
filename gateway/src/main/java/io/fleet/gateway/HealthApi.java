@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import io.fleet.common.PrometheusText;
 import io.fleet.common.StoreException;
 import io.fleet.common.StoreIntegrity;
 import io.fleet.common.Telemetry;
@@ -62,6 +63,7 @@ public final class HealthApi implements AutoCloseable {
     private final HttpServer server;
     private final TelemetryStore store;
     private final BooleanSupplier brokerConnected;
+    private final MetricsExporter exporter;
     private final JsonFactory json = new JsonFactory();
 
     public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics)
@@ -81,10 +83,22 @@ public final class HealthApi implements AutoCloseable {
 
     public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
             TelemetryStore store, BooleanSupplier brokerConnected) throws IOException {
+        // No forwarder to ask, so the Kafka drop count reads zero rather than
+        // being absent. A caller that has one passes it to the constructor
+        // below; this path is used by tests and by a gateway with Kafka off,
+        // where zero is the truth.
+        this(config, registry, metrics, store, brokerConnected,
+                new MetricsExporter(registry, metrics, brokerConnected, () -> 0L));
+    }
+
+    public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
+            TelemetryStore store, BooleanSupplier brokerConnected, MetricsExporter exporter)
+            throws IOException {
         this.registry = registry;
         this.metrics = metrics;
         this.store = store;
         this.brokerConnected = brokerConnected;
+        this.exporter = exporter;
         this.server = HttpServer.create(
                 new InetSocketAddress(config.httpHost(), config.httpPort()), 0);
         this.server.createContext("/health", guarded(this::handleHealth));
@@ -92,6 +106,7 @@ public final class HealthApi implements AutoCloseable {
         this.server.createContext("/devices", guarded(this::handleDevices));
         this.server.createContext("/history", guarded(this::handleHistory));
         this.server.createContext("/stats", guarded(this::handleStats));
+        this.server.createContext("/metrics", guarded(this::handleMetrics));
         this.server.setExecutor(Executors.newFixedThreadPool(2, runnable -> {
             Thread thread = new Thread(runnable, "gateway-http");
             thread.setDaemon(true);
@@ -359,6 +374,27 @@ public final class HealthApi implements AutoCloseable {
      * unavailable. Reporting it as a server error would suggest the whole
      * component is down when the part that matters most is not.
      */
+    /**
+     * The Prometheus scrape endpoint.
+     *
+     * <p>The only route on this server that does not answer JSON, and the only
+     * one whose consumer is a machine with a fixed parser: a scrape that will
+     * not parse is discarded whole, so one bad character costs every metric in
+     * the response rather than one field.
+     *
+     * <p>Deliberately reads nothing from the store. {@code /history} and
+     * {@code /stats} run SQL and can answer 503 when the store is unavailable;
+     * a scrape endpoint that could fail with it would take the dashboard down
+     * at the moment it is most wanted. Everything here is in memory.
+     */
+    private void handleMetrics(HttpExchange exchange) throws IOException {
+        if (rejectNonGet(exchange)) {
+            return;
+        }
+        respond(exchange, 200, PrometheusText.contentType(),
+                exporter.render().getBytes(StandardCharsets.UTF_8));
+    }
+
     private void respondStoreFailure(HttpExchange exchange, StoreException e) throws IOException {
         System.err.println("store query failed: " + e.getMessage());
         respond(exchange, 503, write(generator -> {
@@ -477,7 +513,12 @@ public final class HealthApi implements AutoCloseable {
     }
 
     private void respond(HttpExchange exchange, int status, byte[] body) throws IOException {
-        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        respond(exchange, status, "application/json", body);
+    }
+
+    private void respond(HttpExchange exchange, int status, String contentType, byte[] body)
+            throws IOException {
+        exchange.getResponseHeaders().add("Content-Type", contentType);
         exchange.sendResponseHeaders(status, body.length);
         try (OutputStream out = exchange.getResponseBody()) {
             out.write(body);

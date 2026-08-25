@@ -47,6 +47,24 @@ about. It was found that way. A test suite whose behaviour depends on
 whether a cluster happens to be running is not reproducible, which is the
 one property this project cannot trade away.
 
+Three flags, composable, each pulling in what it needs:
+
+```bash
+./infrastructure/kubernetes/deploy.sh --kafka        # + Kafka and the stream processor
+./infrastructure/kubernetes/deploy.sh --recovery     # + the operator (implies --kafka)
+./infrastructure/kubernetes/deploy.sh --monitoring   # + Prometheus and Grafana
+```
+
+Everything is published on a shifted port, because Jenkins started it:
+
+| Host port | NodePort | What |
+|---|---|---|
+| 18080 | 30080 | Gateway, through the readiness-gated Service |
+| 18081 | 30081 | Gateway, through `gateway-admin` — reachable when not ready |
+| 11883 | 30883 | MQTT broker |
+| 13000 | 30300 | Grafana (`--monitoring`) |
+| 19090 | 30090 | Prometheus (`--monitoring`) |
+
 Tear the whole thing down:
 
 ```bash
@@ -140,6 +158,43 @@ flag:
 kubectl delete -f infrastructure/kubernetes/kafka/ && kubectl -n fleet rollout restart deployment/gateway
 ```
 
+## Monitoring
+
+```bash
+./infrastructure/kubernetes/deploy.sh --recovery --monitoring
+```
+
+Grafana on [13000](http://127.0.0.1:13000), anonymous, opening on the fleet
+dashboard. Prometheus on [19090](http://127.0.0.1:19090) for when a panel says
+"No data" and the question is whether the target is even up.
+
+A separate overlay for the same reason Kafka is one: `prom/prometheus` is
+402 MB and `grafana/grafana` is 707 MB, so between them they are heavier than
+Kafka, and the base stack is a working self-healing fleet without a dashboard.
+
+**Adding `--monitoring` to a cluster that already exists needs the cluster
+recreated.** `kind` cannot add `extraPortMappings` to a running node, so
+13000 and 19090 do not reach anything until the node is rebuilt:
+
+```bash
+./infrastructure/kubernetes/deploy.sh --down && ./infrastructure/kubernetes/deploy.sh --recovery --monitoring
+```
+
+Prometheus scrapes the gateway through **`gateway-admin`**, not `gateway`.
+Readiness withdraws the pod from the latter during a broker outage and there
+is only one replica, so scraping through it would take the dashboard down at
+the exact moment someone went looking — the graph would show a gap where it
+should show `fleet_gateway_broker_connected 0`
+([ADR-012](../../docs/decisions/ADR-012-observability-shape.md)).
+
+The dashboard is `infrastructure/monitoring/grafana/dashboards/fleet.json` and
+that file is the only copy — `deploy.sh` builds the ConfigMap from it.
+`91-grafana.yaml` deliberately does not carry a transcription. See
+[infrastructure/monitoring](../monitoring/README.md).
+
+Nothing on the dashboard is a result. Only a run recorded under
+`experiments/results/` supports a reported number.
+
 ## Probes
 
 The gateway answers two different questions, and Phase 8 is what forced the
@@ -206,3 +261,8 @@ These figures are a demonstration, not a result. Only runs recorded under
   on localhost.
 - **Ingress, HPA, NetworkPolicy, multi-node.** None are needed by anything
   this project measures.
+- **Persistent monitoring storage.** Prometheus and Grafana both write to an
+  `emptyDir`, and Prometheus retains six hours. Deliberate: a dashboard is not
+  evidence, and a run that matters is recorded under `experiments/results/`.
+- **Alerting.** Prometheus has no rules and there is no Alertmanager. There is
+  nobody to page; the recovery operator is the thing that acts on a failure.

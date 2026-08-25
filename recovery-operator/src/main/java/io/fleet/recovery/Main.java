@@ -53,7 +53,15 @@ public final class Main {
         // producer it cannot build must not take the consumer down with it,
         // which is exactly what it used to do.
         try (RecoveryPublisher publisher = new RecoveryPublisher(config);
-             FailureConsumer consumer = new FailureConsumer(config, controller, publisher)) {
+             FailureConsumer consumer = new FailureConsumer(config, controller, publisher);
+             // Opened after the two it reads from, and closed before them, so
+             // a scrape can never reach a half-built consumer.
+             MetricsServer metrics = new MetricsServer(config.metricsPort(),
+                     new OperatorMetricsExporter(controller, consumer, publisher)::render)) {
+
+            metrics.start();
+            System.out.printf(Locale.ROOT, "metrics on http://0.0.0.0:%d/metrics%n",
+                    metrics.port());
 
             Thread poller = new Thread(consumer::run, "recovery-consumer");
             poller.start();

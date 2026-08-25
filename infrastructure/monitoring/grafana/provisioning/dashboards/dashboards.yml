@@ -1,0 +1,18 @@
+# The dashboard is a file in the repository, not state inside Grafana's
+# database. Anything a reviewer cannot read in a diff is not part of the
+# project.
+apiVersion: 1
+
+providers:
+  - name: fleet
+    orgId: 1
+    folder: Fleet
+    type: file
+    disableDeletion: false
+    # Off. Editing a provisioned dashboard in the browser and having Grafana
+    # keep it would put the real dashboard somewhere no diff can see it.
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
