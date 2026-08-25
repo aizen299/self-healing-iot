@@ -93,7 +93,7 @@ nothing, or a negative result, which means the two pods' clocks disagree.
 | `OPERATOR_POLL_TIMEOUT_MS` | `1000` | How long a consumer poll waits |
 | `OPERATOR_REPLACE_LIVE_DEVICES` | `false` | Replace a device whose pod is still running |
 | `OPERATOR_RUN_DURATION_SECONDS` | `0` | `0` runs until interrupted |
-| `OPERATOR_METRICS_PORT` | `8080` | Prometheus scrape port; `0` binds an ephemeral one |
+| `OPERATOR_METRICS_PORT` | `8080` | Prometheus scrape port; `0` binds an ephemeral one. **Override it outside Kubernetes** — 8080 is Jenkins on the development machine, and this server binds `0.0.0.0` |
 
 ## Metrics
 

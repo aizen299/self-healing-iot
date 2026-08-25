@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
+import java.util.function.LongSupplier;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -87,18 +88,28 @@ public final class HealthApi implements AutoCloseable {
         // being absent. A caller that has one passes it to the constructor
         // below; this path is used by tests and by a gateway with Kafka off,
         // where zero is the truth.
-        this(config, registry, metrics, store, brokerConnected,
-                new MetricsExporter(registry, metrics, brokerConnected, () -> 0L));
+        this(config, registry, metrics, store, brokerConnected, () -> 0L);
     }
 
+    /**
+     * @param kafkaForwardFailures the forwarder's drop count, which only the
+     *                             caller holding the forwarder can supply
+     *
+     * <p>A supplier for that one number rather than a built {@link
+     * MetricsExporter}, so that the exporter is constructed here from this
+     * object's own {@code brokerConnected}. Taking a finished exporter let a
+     * caller hand in one built from a different source, and then {@code /ready}
+     * could answer 503 while {@code /metrics} reported the broker connected.
+     */
     public HealthApi(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics,
-            TelemetryStore store, BooleanSupplier brokerConnected, MetricsExporter exporter)
-            throws IOException {
+            TelemetryStore store, BooleanSupplier brokerConnected,
+            LongSupplier kafkaForwardFailures) throws IOException {
         this.registry = registry;
         this.metrics = metrics;
         this.store = store;
         this.brokerConnected = brokerConnected;
-        this.exporter = exporter;
+        this.exporter = new MetricsExporter(registry, metrics, brokerConnected,
+                kafkaForwardFailures);
         this.server = HttpServer.create(
                 new InetSocketAddress(config.httpHost(), config.httpPort()), 0);
         this.server.createContext("/health", guarded(this::handleHealth));
@@ -374,6 +385,16 @@ public final class HealthApi implements AutoCloseable {
      * unavailable. Reporting it as a server error would suggest the whole
      * component is down when the part that matters most is not.
      */
+    private void respondStoreFailure(HttpExchange exchange, StoreException e) throws IOException {
+        System.err.println("store query failed: " + e.getMessage());
+        respond(exchange, 503, write(generator -> {
+            generator.writeStartObject();
+            generator.writeStringField("error", "telemetry store unavailable");
+            generator.writeStringField("detail", String.valueOf(e.getMessage()));
+            generator.writeEndObject();
+        }));
+    }
+
     /**
      * The Prometheus scrape endpoint.
      *
@@ -393,16 +414,6 @@ public final class HealthApi implements AutoCloseable {
         }
         respond(exchange, 200, PrometheusText.contentType(),
                 exporter.render().getBytes(StandardCharsets.UTF_8));
-    }
-
-    private void respondStoreFailure(HttpExchange exchange, StoreException e) throws IOException {
-        System.err.println("store query failed: " + e.getMessage());
-        respond(exchange, 503, write(generator -> {
-            generator.writeStartObject();
-            generator.writeStringField("error", "telemetry store unavailable");
-            generator.writeStringField("detail", String.valueOf(e.getMessage()));
-            generator.writeEndObject();
-        }));
     }
 
     private static Map<String, String> parseQuery(String rawQuery) {

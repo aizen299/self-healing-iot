@@ -7,6 +7,8 @@ import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.ThreadMXBean;
+import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
@@ -56,6 +58,28 @@ public final class MetricsExporter {
     }
 
     private void fleet(PrometheusText out) {
+        // One snapshot, counted here, rather than size() + reportingCount() +
+        // healthCounts() + all(). Not for the four saved traversals, which are
+        // nothing at fleet scale: four calls are four different instants, so
+        // fleet_devices{state} need not sum to fleet_devices_known and neither
+        // need agree with fleet_device_up. One list is one instant.
+        List<DeviceRecord> devices = registry.all();
+
+        // Every state, including the zeroes: a panel for OFFLINE that simply
+        // has no series when nothing is offline reads as "no data", which
+        // looks like a broken scrape rather than a healthy fleet.
+        Map<DeviceHealth, Long> byHealth = new EnumMap<>(DeviceHealth.class);
+        for (DeviceHealth health : DeviceHealth.values()) {
+            byHealth.put(health, 0L);
+        }
+        long reporting = 0L;
+        for (DeviceRecord device : devices) {
+            byHealth.merge(device.health(), 1L, Long::sum);
+            if (!device.presenceOnly()) {
+                reporting++;
+            }
+        }
+
         // Two counts, because they answer different questions and the
         // difference has bitten before. A retained presence message from a
         // device that no longer exists creates a record the gateway has never
@@ -64,23 +88,31 @@ public final class MetricsExporter {
         out.gauge("fleet_devices_known",
                 "Device ids the gateway has a record for, including"
                         + " retained-presence ghosts it has never heard from");
-        out.sample("fleet_devices_known", registry.size());
+        out.sample("fleet_devices_known", devices.size());
 
         out.gauge("fleet_devices_reporting",
                 "Devices that have actually sent the gateway something");
-        out.sample("fleet_devices_reporting", registry.reportingCount());
+        out.sample("fleet_devices_reporting", reporting);
 
         out.gauge("fleet_devices", "Devices by health state");
-        Map<DeviceHealth, Long> byHealth = registry.healthCounts();
-        // Every state, including the zeroes: a panel for OFFLINE that simply
-        // has no series when nothing is offline reads as "no data", which
-        // looks like a broken scrape rather than a healthy fleet.
         for (DeviceHealth health : DeviceHealth.values()) {
             out.sample("fleet_devices", "state", health.name(), byHealth.get(health));
         }
 
-        out.gauge("fleet_device_up", "1 when the device is ONLINE, 0 otherwise");
-        for (DeviceRecord device : registry.all()) {
+        // Reporting devices only. A retained-presence ghost is never ONLINE,
+        // so including it would draw a permanently red row on the panel whose
+        // entire job is answering "which device is down" — for a device that
+        // does not exist and that the operator will correctly never recover.
+        // Worse, ghosts accumulate with broker history rather than with fleet
+        // size, so each one becomes a Prometheus series that never goes away.
+        out.gauge("fleet_device_up",
+                "1 when the device is ONLINE, 0 otherwise. Reporting devices only;"
+                        + " retained-presence ghosts are counted in fleet_devices_known"
+                        + " and appear here not at all");
+        for (DeviceRecord device : devices) {
+            if (device.presenceOnly()) {
+                continue;
+            }
             out.sample("fleet_device_up", "device_id", device.deviceId(),
                     device.health() == DeviceHealth.ONLINE ? 1L : 0L);
         }
@@ -146,11 +178,14 @@ public final class MetricsExporter {
         out.sample("fleet_recovery_duration_millis_bucket", "le", "+Inf", cumulative);
         out.sample("fleet_recovery_duration_millis_sum",
                 metrics.recoveryDurationTotalMillis());
-        // Not recoveriesObservedCount: a recovery whose two clocks disagreed
-        // contributes no duration, and a _count larger than the +Inf bucket is
-        // an inconsistent histogram that Prometheus reads as buckets missing.
-        out.sample("fleet_recovery_duration_millis_count",
-                metrics.recoveryDurationSampleCount());
+        // The +Inf total itself, not a second read of the sample count. The
+        // two are the same number in a quiet moment, but a recovery landing
+        // between reading the buckets and reading the count would make _count
+        // exceed +Inf — an inconsistent histogram, which is what Prometheus
+        // reads as buckets missing. Emitting the cumulative makes them equal
+        // by construction rather than by timing. _sum can still drift by one
+        // recovery; that Prometheus tolerates, and _count vs +Inf it does not.
+        out.sample("fleet_recovery_duration_millis_count", cumulative);
     }
 
     private void gateway(PrometheusText out) {
@@ -184,7 +219,7 @@ public final class MetricsExporter {
     }
 
     /**
-     * Four numbers off the MXBeans, under the {@code fleet_} prefix like
+     * Five numbers off the MXBeans, under the {@code fleet_} prefix like
      * everything else.
      *
      * <p>Not named {@code jvm_memory_used_bytes}: that name belongs to the

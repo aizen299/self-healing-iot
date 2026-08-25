@@ -51,13 +51,13 @@ public final class Main {
              // The ingestor supplies readiness: /ready is 503 until the
              // broker connection is up, so a Kubernetes Service does not
              // route to a gateway that is running but recording nothing.
+             // The drop count is the only thing HealthApi cannot reach on its
+             // own; it lives on the forwarder, and this is the only place that
+             // has both. Everything else the exporter needs, HealthApi already
+             // holds — including the readiness supplier, so /ready and
+             // /metrics cannot disagree about the broker.
              HealthApi api = new HealthApi(config, registry, metrics, store,
-                     ingestor::isConnected,
-                     // The exporter is built here rather than inside HealthApi
-                     // because the forwarder's drop count lives on the
-                     // forwarder, and this is the only place that has both.
-                     new MetricsExporter(registry, metrics, ingestor::isConnected,
-                             forwarder::forwardFailures))) {
+                     ingestor::isConnected, forwarder::forwardFailures)) {
 
             // Closes the cycle described on MqttIngestor.onTransition: the
             // monitor announces what the ingestor observes, and publishes

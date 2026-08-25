@@ -35,7 +35,9 @@ the fleet dashboard with anonymous access. The ports are shifted from 3000 and
 machine, and one convention beats two.
 
 `--monitoring` composes with the other flags. Without `--recovery` the
-operator panels stay at zero, which is the truth rather than a fault.
+operator's Service does not exist, so Prometheus shows that target **DOWN**
+and the operator panels say *No data* — not zero. `deploy.sh` prints a note
+when the two flags are used apart. The gateway panels are unaffected.
 
 Adding `--monitoring` to an **existing** cluster needs the cluster recreated —
 `kind` cannot add `extraPortMappings` to a running node:

@@ -96,6 +96,13 @@ public record OperatorConfig(
                 Env.longValue(env, "OPERATOR_RUN_DURATION_SECONDS", 0L),
                 // The same port the gateway serves on, because it is a
                 // different pod. One number to remember rather than two.
+                //
+                // Set it when running this outside Kubernetes. On the
+                // development machine 8080 is Jenkins, which is why every
+                // host-facing port in this project is shifted, and this server
+                // binds 0.0.0.0 — so a local run either fails to bind or binds
+                // and loses localhost traffic to Jenkins, the same confusion
+                // docker-compose.yml already records for the gateway.
                 Env.intValue(env, "OPERATOR_METRICS_PORT", 8080));
     }
 }
