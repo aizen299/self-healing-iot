@@ -61,6 +61,7 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
      */
     private volatile Consumer<HealthTransition> onTransition = transition -> { };
     private final Clock clock;
+    private final ConnectionFlapDetector flapDetector;
     private final MqttClient client;
 
     public MqttIngestor(GatewayConfig config, DeviceRegistry registry, GatewayMetrics metrics) {
@@ -90,6 +91,7 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
         this.registry = registry;
         this.metrics = metrics;
         this.clock = clock;
+        this.flapDetector = new ConnectionFlapDetector(clock);
         this.policy = policy;
         this.store = store;
         try {
@@ -327,6 +329,10 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
     public void connectionLost(Throwable cause) {
         metrics.connectionLost();
         System.err.println("gateway lost its broker connection: " + cause);
+        // Paho reports every drop the same way, so a connection being evicted
+        // by a second gateway looks exactly like a broker restart. This is the
+        // line that tells them apart.
+        flapDetector.recordLoss(config.clientId()).ifPresent(System.err::println);
     }
 
     @Override

@@ -81,6 +81,26 @@ Devices walk `UNKNOWN → ONLINE → SUSPECTED → OFFLINE → RECOVERING → ON
 Transitions worth acting on are published to `fleet/{id}/events` at QoS 1.
 `ONLINE → SUSPECTED` is not among them.
 
+### One gateway, and why it cannot be two
+
+The gateway is a singleton by construction. It holds the device registry in
+memory, takes an exclusive lock on the embedded H2 file, and connects to the
+broker under a fixed `GATEWAY_CLIENT_ID`.
+
+Scaling it does not share the load. MQTT client ids are unique per broker by
+definition, so when the second gateway connects the broker disconnects the
+first, which reconnects and disconnects the second, and so on. While each is
+disconnected it is not receiving heartbeats — so it declares healthy devices
+failed, and the recovery operator is asked to replace pods that are running
+perfectly well. That is the observed outcome of one `kubectl scale
+deployment/gateway --replicas=3`: three false failures in under a minute.
+
+The Deployment therefore pins `replicas: 1` and `strategy: Recreate`, and both
+are load-bearing. `ConnectionFlapDetector` covers the case where someone
+overrides them anyway: after three dropped connections inside a minute it logs
+what is happening and what to check, because Paho reports an eviction and a
+broker restart with exactly the same message.
+
 ## Persistence
 
 Telemetry and health events are stored in an embedded H2 database

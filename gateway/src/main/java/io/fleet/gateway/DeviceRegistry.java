@@ -51,13 +51,69 @@ public final class DeviceRegistry {
 
         DeviceHealth[] before = new DeviceHealth[1];
         long[] offlineSince = new long[1];
+        Presence[] presenceBefore = new Presence[1];
         DeviceRecord after = devices.compute(deviceId, (id, existing) -> {
             DeviceRecord record = orUnknown(id, existing);
             before[0] = record.health();
             offlineSince[0] = record.offlineSinceMillis();
+            presenceBefore[0] = record.presence();
             return record.withPresence(presence, atMillis, policy);
         });
-        return transitionOf(before[0], offlineSince[0], after, atMillis, 0);
+
+        Optional<HealthTransition> changed =
+                transitionOf(before[0], offlineSince[0], after, atMillis, 0);
+        if (changed.isPresent()) {
+            return changed;
+        }
+        return deathOfAnAlreadyFailedDevice(
+                presenceBefore[0], presence, after, offlineSince[0], atMillis);
+    }
+
+    /**
+     * A will that fires for a device already recorded as failed.
+     *
+     * <p>Health is a state and failure detection is edge-triggered on it, so a
+     * device that is already {@code OFFLINE} cannot transition to
+     * {@code OFFLINE} again and emits nothing. That is right when the device
+     * really is the one already reported — and wrong in the case that matters:
+     * a device declared offline by a heartbeat timeout that was never true.
+     *
+     * <p>It happens. A gateway that loses its own broker connection stops
+     * receiving heartbeats it should have received, declares the whole fleet
+     * failed, and the operator correctly answers "no recovery needed, the pod
+     * is Running" for each. Every device is then marked {@code OFFLINE} while
+     * alive, and no replacement exists. When one of them genuinely dies, the
+     * broker's will is the only evidence anyone gets — and the health state
+     * machine swallows it. The device stays dead, unreported and unreplaced,
+     * which was observed for two minutes before this existed.
+     *
+     * <p>The signal is the <em>presence</em> edge rather than the health edge:
+     * a device seen {@code ONLINE} whose connection has now dropped. That
+     * keeps the two guards this must not break. A retained will replayed to a
+     * fresh gateway does not fire, because the device was never seen
+     * {@code ONLINE} on that connection — the same reasoning that keeps
+     * retained-presence ghosts out of the recovery path (ADR-006). And a
+     * redelivered will does not fire twice, because the second one finds the
+     * presence already {@code OFFLINE}.
+     *
+     * <p>The transition it produces is {@code OFFLINE → OFFLINE}, which reads
+     * oddly and is accurate: the device was already believed down, and the
+     * broker has now confirmed it is gone. Recovery stays idempotent because
+     * the operator derives its replacement's name from the detection time
+     * (ADR-011), so this asks for a pod the earlier detection never created.
+     */
+    private static Optional<HealthTransition> deathOfAnAlreadyFailedDevice(
+            Presence before, Presence now, DeviceRecord after,
+            long offlineSinceBefore, long atMillis) {
+
+        if (before != Presence.ONLINE || now != Presence.OFFLINE
+                || after.health() != DeviceHealth.OFFLINE) {
+            return Optional.empty();
+        }
+        long offlineSince = after.offlineSinceMillis() > 0L
+                ? after.offlineSinceMillis() : offlineSinceBefore;
+        return Optional.of(new HealthTransition(after.deviceId(),
+                DeviceHealth.OFFLINE, DeviceHealth.OFFLINE, atMillis, 0, offlineSince));
     }
 
     /**

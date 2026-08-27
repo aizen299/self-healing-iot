@@ -7,6 +7,13 @@ kind: Application
 metadata:
   name: fleet-monitoring
   namespace: argocd
+  annotations:
+    # Ordering, not preference. base/00-namespace.yaml declares the namespace
+    # everything else is created in, so the platform app has to land first;
+    # without a wave the others can be applied against a namespace that does
+    # not exist yet and fail their first sync. Argo applies wave 0 to
+    # completion before starting wave 1.
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   project: fleet
   source:

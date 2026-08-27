@@ -71,6 +71,15 @@ metadata:
   labels:
     app: gateway
 spec:
+  # One, and it cannot be raised. The gateway is a singleton by construction:
+  # it holds the device registry in memory, takes an exclusive lock on the
+  # embedded store, and connects to the broker under a fixed client id. A
+  # second replica does not share the load — it evicts the first from the
+  # broker, which then evicts it back, and while each is disconnected it misses
+  # heartbeats and declares healthy devices failed. `kubectl scale` on this
+  # deployment produces false failures within seconds; the gateway logs what is
+  # happening after the third dropped connection (ConnectionFlapDetector), but
+  # the only correct value here is 1.
   replicas: 1
   selector:
     matchLabels:

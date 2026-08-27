@@ -141,11 +141,15 @@ jobs:
             rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
             -color
 
-      - name: The gate's own tests
-        # assert-suite-complete.py decides whether a build counts, so a
-        # regression in it is invisible by construction: the symptom is a
-        # green run. Its fixtures live in the script and need no build.
-        run: python3 .github/scripts/assert-suite-complete.py --self-test
+      - name: The gates' own tests
+        # These two decide whether a build counts and whether the GitOps
+        # manifests are coherent, so a regression in either is invisible by
+        # construction: the symptom is a green run. Their fixtures live in the
+        # scripts and need no build. The GitOps one has already earned its
+        # keep — its fixtures caught a bug in the checker on the first run.
+        run: |
+          python3 .github/scripts/assert-suite-complete.py --self-test
+          python3 .github/scripts/assert-gitops-sane.py --self-test
 
   manifests:
     name: kubernetes manifests
@@ -173,6 +177,17 @@ jobs:
             ghcr.io/yannh/kubeconform@sha256:6b90a5f23d846140ce0194fe050b1995e546eba938f3a6bf10c039dd5e24588f \
             -strict -summary -ignore-missing-schemas \
             infrastructure/kubernetes infrastructure/gitops
+
+      - name: Check the GitOps manifests
+        # kubeconform has no schema for Application or AppProject, so the step
+        # above parses them and learns nothing else. This checks what actually
+        # goes wrong with them: a path that does not exist in the repository,
+        # manifests disagreeing about the repository or the project, a
+        # targetRevision left pointing at a branch, a missing sync wave, and a
+        # managed path that has acquired a bare Pod — the boundary ADR-016
+        # exists to defend, failing in review rather than at sync time.
+        run: |
+          python3 .github/scripts/assert-gitops-sane.py
 
       - name: Parse the Grafana dashboard
         # deploy.sh builds a ConfigMap out of this file, and it is the only
