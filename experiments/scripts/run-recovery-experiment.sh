@@ -92,7 +92,6 @@ probe=$(curl -fsS --max-time 5 "$GATEWAY_URL/devices/${DEVICE_IDS%% *}" 2>/dev/n
 echo "  gateway API reachable at $GATEWAY_URL"
 
 say "recording metadata"
-GATEWAY_POD=$("${KUBECTL[@]}" get pods -l app=gateway -o jsonpath='{.items[0].metadata.name}')
 DEVICE_COUNT=$(echo "$DEVICE_IDS" | wc -w | tr -d ' ')
 
 # Captured from the cluster rather than restated here, so the metadata cannot

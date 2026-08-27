@@ -1,0 +1,188 @@
+# The gate every change passes, and the only thing that publishes an image.
+#
+# What this pipeline is for, in one line: it runs the tests against a real
+# broker and refuses to call a run green unless the whole suite actually ran.
+# Eleven of the 260 tests skip themselves when no broker is listening, and a
+# skipped test reports success — so the interesting failure here is not a red
+# build, it is a green one that measured nothing. See ADR-014.
+name: CI
+
+# Pull requests are the gate. A version tag is the only trigger that
+# publishes, and it publishes nothing that has not passed the gate first.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Superseded pull-request runs are cancelled. Runs on main and on tags are
+# not: those are the ones whose result something downstream depends on.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # The tests already default to this. Stating it makes the broker this
+      # workflow starts and the broker the tests look for one decision
+      # instead of two that have to agree.
+      MQTT_BROKER_URL: tcp://127.0.0.1:1883
+    steps:
+      # Actions are pinned to a commit SHA, not a tag, for the reason the
+      # Dockerfile pins its base images by digest: a tag moves, and a gate
+      # that can change under you is not a gate. The tag each SHA stood for
+      # when it was pinned is in the comment above it.
+      - name: Check out
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install the pinned JDK
+        # actions/setup-java v6.0.0
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c
+        with:
+          # Temurin 21, matching ADR-002 and the eclipse-temurin base images.
+          # The enforcer rejects anything else, GraalVM included, so this is
+          # the JDK the build will accept rather than merely prefer.
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Start the broker
+        # compose, not a service container. The broker's configuration lives
+        # in this repository — anonymous access on, persistence off so
+        # retained presence cannot survive into the next run (ADR-004) — and
+        # a service container starts before the checkout that would supply
+        # that file. This is the same image, at the same pinned digest, with
+        # the same config as `docker compose up`.
+        run: docker compose up -d --wait broker
+
+      - name: Build and test
+        # verify, not test: the images copy target/dependency, which the
+        # dependency plugin writes at the package phase. Stopping at `test`
+        # would leave that step for the image job to discover.
+        run: mvn -B verify
+
+      - name: Assert the suite ran complete
+        # The point of the job. `mvn` exits 0 on a skipped test; this does not.
+        run: python3 .github/scripts/assert-suite-complete.py
+
+      - name: Keep the test reports
+        if: always()
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/**'
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Broker logs
+        # A build that failed because the broker did not come up looks, from
+        # the Maven output alone, like a fleet of connection timeouts.
+        if: failure()
+        run: docker compose logs broker
+
+  scripts:
+    name: shell scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: ShellCheck
+        # Pinned by digest, like everything else here, so the gate cannot
+        # tighten on its own the day a new shellcheck ships a new warning.
+        #
+        # `--severity=style` is the strictest setting, and that is deliberate.
+        # The scripts in this repository are the experiment apparatus: Phase
+        # 11 discarded two runs over their bugs, one of them a pair of
+        # backticks inside an unquoted heredoc, which shellcheck reports as
+        # SC2006. A shell bug in the apparatus does not announce itself the
+        # way a failing test does.
+        run: |
+          git ls-files -z '*.sh' | xargs -0 -r docker run --rm \
+            -v "$PWD:/mnt" -w /mnt \
+            koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183 \
+            shellcheck --severity=style --format=gcc
+
+  images:
+    name: images and smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Build the image compose does not
+        # The Dockerfile lists every module's pom and source directory by
+        # hand, so a new module can build under Maven and fail inside Docker
+        # on a clean cache. compose builds three of the four runtime targets;
+        # the recovery operator is only ever built by deploy.sh, so without
+        # this step nothing in CI would touch it.
+        run: |
+          docker build -f infrastructure/docker/Dockerfile \
+            --target recovery-operator -t fleet-recovery-operator:ci .
+
+      - name: Smoke test the stack
+        # This script has said since Phase 7 that it is what Phase 12's CI
+        # should run. It builds the images, starts a broker, a gateway and a
+        # short-lived fleet, and fails unless the gateway accepted telemetry
+        # and the store reports a complete history — ingestion without
+        # persistence being a silent gap rather than an error (ADR-007).
+        run: ./infrastructure/docker/smoke-test.sh
+
+  publish:
+    name: publish images
+    # Only a version tag publishes. Merging to main does not, and neither
+    # does a manual run: an image in a registry is the one artefact of this
+    # pipeline that leaves the machine, so it should correspond to a commit
+    # someone deliberately named rather than to whatever main is today.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-and-test, scripts, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Log in to the registry
+        env:
+          # Through the environment rather than interpolated into the script,
+          # so the token is never part of a command line.
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push every runtime image
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          sha_tag="sha-${GITHUB_SHA:0:12}"
+
+          # Two tags, and no :latest. The Dockerfile pins its own base images
+          # by digest because a moving tag silently changes the JVM under a
+          # measurement; publishing a moving tag of our own would hand that
+          # same problem to whatever pulls these. The version tag names the
+          # release, the sha tag names the commit, and both are immutable.
+          for target in gateway edge-device stream-processor recovery-operator; do
+            image="ghcr.io/${repo}/${target}"
+            docker build -f infrastructure/docker/Dockerfile --target "$target" \
+              -t "${image}:${GITHUB_REF_NAME}" -t "${image}:${sha_tag}" .
+            docker push "${image}:${GITHUB_REF_NAME}"
+            docker push "${image}:${sha_tag}"
+            docker inspect --format "published {{index .RepoDigests 0}}" \
+              "${image}:${GITHUB_REF_NAME}"
+          done

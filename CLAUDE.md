@@ -34,13 +34,14 @@ that way until a run produces it.
 
 ## Current status
 
-**Phases 1–11 complete — a self-healing fleet you can watch, and now
-measure.** A device that dies is detected, replaced, and back online with
-nobody touching it; Prometheus and Grafana show it happening; and Phase 11
-recorded the first real results — 20 samples of MTTR and a recovery success
-rate, under the reproducibility contract. See
-`docs/experiments/pillar-b-recovery.md`. Pillars A and C are still unmeasured
-and the writeup index says so. Phase 7 was taken before Phase 6
+**Phases 1–12 complete — a self-healing fleet you can watch, measure, and
+no longer break by accident.** A device that dies is detected, replaced, and
+back online with nobody touching it; Prometheus and Grafana show it happening;
+Phase 11 recorded the first real results — 20 samples of MTTR and a recovery
+success rate, under the reproducibility contract; and Phase 12 puts a gate in
+front of every change. See `docs/experiments/pillar-b-recovery.md`. Pillars A
+and C are still unmeasured and the writeup index says so. Phase 7 was taken
+before Phase 6
 (ADR-008): Kafka and a real TSDB both need a server, and containers supply
 them. The phase numbers still identify the work, but no longer its order.
 Every module is implemented and tested.
@@ -55,6 +56,44 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 mvn clean test                                  # all modules
 mvn -pl edge-device -am test                    # one module + its deps
 ```
+
+CI is **GitHub Actions** (`.github/workflows/ci.yml`), deliberately not the
+Jenkins already running on this machine: Jenkins competes for the same 8 GB
+the experiments measure in, and a build starting mid-run would sit inside a
+measurement invisibly (ADR-014).
+
+The gate is not "the build passed" but **"the suite ran complete."** `mvn`
+exits 0 when tests are skipped, and 11 of the 260 tests skip themselves when
+no broker is listening — the whole MQTT wire path plus heartbeat detection.
+CI starts a real broker with `docker compose up -d --wait broker` and then
+runs the check, which fails on any skip or any module that did not report:
+
+```bash
+mvn -B verify && python3 .github/scripts/assert-suite-complete.py
+```
+
+There is **no allow-list** in that check, on purpose — a test that needs to
+skip in CI requires a visible edit here with a reviewer attached.
+
+**Never add a benchmark, timing assertion or performance-trend job to CI.**
+Shared runners of unstated hardware cannot satisfy the reproducibility
+contract, and a CI-generated chart is exactly the artefact that gets mistaken
+for a result. The smoke test asserts behaviour (telemetry accepted, history
+complete), never latency.
+
+ShellCheck runs at `--severity=style` — the strictest — over
+`git ls-files '*.sh'`, because those scripts are the experiment apparatus and
+Phase 11 lost two runs to bugs in them. Actions are pinned by commit SHA, the
+runner to `ubuntu-24.04`, ShellCheck by image digest: same argument as the
+Dockerfile's base-image digests.
+
+Images publish to GHCR on a `v*` tag only — never on a merge — with immutable
+version and sha tags and **no `:latest`**. There is no environment to
+continuously deploy to; `deploy.sh` side-loads into kind with no registry in
+the path.
+
+The smoke test (`infrastructure/docker/smoke-test.sh`) cannot run while the
+kind cluster is up: both publish the gateway on host 18080.
 
 The full stack runs in containers, published on **18080** because 8080 is
 already taken on this machine (Jenkins):
@@ -286,6 +325,7 @@ duplicate the wire format.
 | `docs/architecture/`, `docs/api/`, `docs/experiments/` | Architecture docs, gateway API docs, experiment writeups — written to describe what exists, not what's planned |
 | `tests/integration`, `tests/e2e` | Cross-module suites — see testing requirements below |
 | `tests/unit` | Reserved for cross-module unit-level suites; currently empty. Per-module unit tests live in each module's `src/test/java` |
+| `.github/workflows/`, `.github/scripts/` | CI pipeline and the checks it runs. `assert-suite-complete.py` is the gate that a skipped test cannot pass |
 
 Each module's own `README.md` is the source of truth for that module's
 current implementation status; keep it updated as phases land there.
