@@ -124,6 +124,24 @@ Adopting the gate required one fix: a dead `GATEWAY_POD` assignment left in
 the experiment runner after config capture moved to `kubectl logs
 deployment/...`.
 
+## Verified
+
+The gate was demonstrated on the pull request that introduced it, by pointing
+`MQTT_BROKER_URL` at a port nothing was listening on and pushing. The broker
+container still started and reported healthy, `mvn verify` still printed
+`BUILD SUCCESS`, and the run failed anyway:
+
+```
+FAIL: the suite ran 260 tests but did not run complete:
+  - 11 of 260 tests were skipped: io.fleet.edge.mqtt.MqttTelemetrySinkTest
+    (7/7), io.fleet.integration.HeartbeatFailureDetectionTest (2/2),
+    io.fleet.integration.MqttToGatewayTest (2/2)
+```
+
+That is the whole argument for this job in one run: a healthy broker, a
+successful build, and no coverage of the MQTT path. The change was reverted
+and the pipeline went green again.
+
 ## Consequences
 
 - **The pipeline is four jobs**: build-and-test (with a broker), shell
