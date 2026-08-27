@@ -1,0 +1,28 @@
+# Prometheus and Grafana. Mirrors ./deploy.sh --monitoring. The dashboard
+# ConfigMap is deliberately not here: deploy.sh builds it from the single
+# JSON file, and committing a generated copy would be a second
+# transcription of a 20-panel dashboard (ADR-016).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fleet-monitoring
+  namespace: argocd
+spec:
+  project: fleet
+  source:
+    repoURL: https://github.com/aizen299/self-healing-iot.git
+    targetRevision: main
+    path: infrastructure/kubernetes/monitoring
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: fleet
+  syncPolicy:
+    automated:
+      # prune: a resource deleted from git is deleted from the cluster.
+      # selfHeal: a resource changed in the cluster is put back. Both are safe
+      # here only because no device Pod is in this Application's path — see
+      # project.yaml, which refuses to manage a Pod at all.
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

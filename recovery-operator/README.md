@@ -59,7 +59,7 @@ The guarantee is a property of cluster state, which outlives the process.
 ## The replacement is cloned
 
 Not templated. A spec written into this operator would be a second copy of
-`base/40-devices.yaml` and the two would drift — the fleet would get a heap
+`fleet/40-devices.yaml` and the two would drift — the fleet would get a heap
 flag that replacements silently did not.
 
 It clones the failed pod's own manifest when that still exists (a crashed

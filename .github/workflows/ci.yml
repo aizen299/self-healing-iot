@@ -163,13 +163,16 @@ jobs:
         # what the operator looks for — surfaced only when someone ran
         # deploy.sh, which is also the moment an experiment was about to start.
         #
-        # -ignore-missing-schemas is for kind-cluster.yaml: kind's Cluster is
-        # not a Kubernetes API type and has no schema to check it against.
+        # -ignore-missing-schemas covers the types with no published schema:
+        # kind's Cluster, and Argo CD's Application and AppProject. Those are
+        # parsed as YAML and checked by `kubectl apply` at bootstrap, but they
+        # are not schema-validated here — worth knowing before trusting a
+        # green run on a typo inside an Application spec.
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo \
             ghcr.io/yannh/kubeconform@sha256:6b90a5f23d846140ce0194fe050b1995e546eba938f3a6bf10c039dd5e24588f \
             -strict -summary -ignore-missing-schemas \
-            infrastructure/kubernetes
+            infrastructure/kubernetes infrastructure/gitops
 
       - name: Parse the Grafana dashboard
         # deploy.sh builds a ConfigMap out of this file, and it is the only

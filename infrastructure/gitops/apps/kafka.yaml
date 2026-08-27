@@ -1,0 +1,26 @@
+# Kafka and the stream processor. Mirrors ./deploy.sh --kafka. Downstream of
+# detection, never on its path (ADR-009).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fleet-kafka
+  namespace: argocd
+spec:
+  project: fleet
+  source:
+    repoURL: https://github.com/aizen299/self-healing-iot.git
+    targetRevision: main
+    path: infrastructure/kubernetes/kafka
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: fleet
+  syncPolicy:
+    automated:
+      # prune: a resource deleted from git is deleted from the cluster.
+      # selfHeal: a resource changed in the cluster is put back. Both are safe
+      # here only because no device Pod is in this Application's path — see
+      # project.yaml, which refuses to manage a Pod at all.
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

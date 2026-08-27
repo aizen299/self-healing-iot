@@ -1,0 +1,27 @@
+# The recovery operator, and the RBAC that lets it replace a pod. Mirrors
+# ./deploy.sh --recovery. It is the component that puts a device back —
+# which is exactly why Argo must not also be doing that (ADR-016).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fleet-recovery
+  namespace: argocd
+spec:
+  project: fleet
+  source:
+    repoURL: https://github.com/aizen299/self-healing-iot.git
+    targetRevision: main
+    path: infrastructure/kubernetes/recovery
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: fleet
+  syncPolicy:
+    automated:
+      # prune: a resource deleted from git is deleted from the cluster.
+      # selfHeal: a resource changed in the cluster is put back. Both are safe
+      # here only because no device Pod is in this Application's path — see
+      # project.yaml, which refuses to manage a Pod at all.
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
