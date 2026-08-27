@@ -85,31 +85,63 @@ say "installing Argo CD ${ARGOCD_VERSION} (core)"
 # exist to serve a web console are not worth their memory here.
 "${KUBECTL[@]}" create namespace "$NAMESPACE" --dry-run=client -o yaml \
   | "${KUBECTL[@]}" apply -f -
-"${KUBECTL[@]}" -n "$NAMESPACE" apply -f "$ARGOCD_MANIFEST"
+
+# --server-side is not optional here. A client-side apply stores the whole
+# manifest in a last-applied-configuration annotation, and Argo's
+# ApplicationSet CRD is larger than the 262144-byte ceiling on annotations —
+# it fails with "metadata.annotations: Too long" after creating most of the
+# install, which looks like a partial success rather than an error.
+"${KUBECTL[@]}" -n "$NAMESPACE" apply --server-side --force-conflicts \
+  -f "$ARGOCD_MANIFEST"
 
 say "waiting for Argo CD"
 "${KUBECTL[@]}" -n "$NAMESPACE" rollout status deployment/argocd-repo-server --timeout=300s
 "${KUBECTL[@]}" -n "$NAMESPACE" rollout status statefulset/argocd-application-controller --timeout=300s
 
-say "applying the project and the root Application"
+say "applying the project"
 "${KUBECTL[@]}" apply -f project.yaml
 
 if [ "$REVISION" = "main" ]; then
+  say "applying the root Application"
+  # The normal path. Argo reads apps/ from git and creates the four component
+  # Applications itself, so the set of managed components is whatever the
+  # repository says it is.
   "${KUBECTL[@]}" apply -f root.yaml
 else
-  # Tracking a branch is for trying a change before it is merged. The file on
-  # disk is not edited: the override is applied to the object, so the
-  # repository always says main and the cluster says what you asked for.
-  echo "  tracking $REVISION instead of main"
-  sed "s|targetRevision: main|targetRevision: $REVISION|" root.yaml \
-    | "${KUBECTL[@]}" apply -f -
+  say "applying the component Applications directly at $REVISION"
+  # The app-of-apps is deliberately bypassed here, because it cannot reach an
+  # unmerged branch. A root pointed at a branch still reads that branch's
+  # apps/*.yaml, and those say `targetRevision: main` — as they must, since
+  # they are the committed production manifests. The children would then track
+  # main while the root tracked the branch.
+  #
+  # That is not a hypothetical: the first run of this script did exactly that,
+  # and the children synced main, where the device Pods are still under base/.
+  # The AppProject refused them — "resource :Pod is not permitted in project
+  # fleet" — which is the guard working, but it is not the thing being tested.
+  #
+  # So a branch is tried by applying the components directly with the revision
+  # substituted, and no root: one owner per Application, and nothing to fight
+  # over. `main` is the only revision the full pattern runs at.
+  echo "  (no root Application — see the comment in this script)"
+  for app in apps/*.yaml; do
+    sed "s|targetRevision: main|targetRevision: $REVISION|" "$app" \
+      | "${KUBECTL[@]}" apply -f -
+  done
 fi
 
-say "waiting for the Applications to appear"
-for _ in $(seq 1 60); do
+say "waiting for the Applications to sync"
+# Four components, plus the root when there is one.
+expected=4
+[ "$REVISION" = "main" ] && expected=5
+
+for _ in $(seq 1 90); do
   count=$("${KUBECTL[@]}" -n "$NAMESPACE" get applications \
     -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | wc -w | tr -d ' ')
-  [ "$count" -ge 5 ] && break
+  synced=$("${KUBECTL[@]}" -n "$NAMESPACE" get applications \
+    -o jsonpath='{.items[*].status.sync.status}' 2>/dev/null \
+    | tr ' ' '\n' | grep -c '^Synced$' || true)
+  [ "$count" -ge "$expected" ] && [ "$synced" -ge "$expected" ] && break
   sleep 2
 done
 

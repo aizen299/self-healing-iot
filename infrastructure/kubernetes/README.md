@@ -11,6 +11,20 @@ and with it a killed device comes back on its own.
 Design decisions are in
 [ADR-010](../../docs/decisions/ADR-010-kubernetes-deployment-shape.md).
 
+
+The manifests are split so that the boundary in
+[ADR-016](../../docs/decisions/ADR-016-gitops-boundary.md) is a directory
+rather than a convention:
+
+| Directory | Managed by |
+|---|---|
+| `base/`, `kafka/`, `recovery/`, `monitoring/` | Argo CD, once `infrastructure/gitops/bootstrap.sh` has run — and `deploy.sh` before that |
+| `fleet/` | `deploy.sh` and the recovery operator, never Argo |
+
+A device that fails must stay missing until the operator replaces it, because
+that interval is the MTTR this project measures. Nothing that reconciles
+desired state may own `fleet/`.
+
 ## Running it
 
 ```bash
@@ -18,7 +32,7 @@ Design decisions are in
 ```
 
 That builds the images, side-loads them into the cluster (there is no
-registry), applies `base/`, and waits for the pipeline. Then:
+registry), applies `base/` and `fleet/`, and waits for the pipeline. Then:
 
 ```bash
 curl -s http://127.0.0.1:18080/health

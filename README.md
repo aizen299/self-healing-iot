@@ -66,7 +66,8 @@ Full architecture detail lives in `docs/architecture/`.
 | `common/` | Shared DTOs, protocol/schema definitions, utilities used across modules |
 | `infrastructure/docker/` | Dockerfiles and Compose configuration for local runs |
 | `infrastructure/kubernetes/` | Kubernetes manifests (Deployments, ConfigMaps, probes, RBAC for the operator) |
-| `infrastructure/helm/` | Optional Helm charts (later phase) |
+| `infrastructure/gitops/` | Argo CD: the AppProject that draws the boundary, the app-of-apps, and `bootstrap.sh` |
+| `infrastructure/helm/` | Reserved for a Helm chart and deliberately still empty — see ADR-016 |
 | `infrastructure/monitoring/` | Prometheus scrape config, Grafana dashboards/provisioning |
 | `experiments/` | Reproducible experiment configs, scripts, and raw/processed results (see `experiments/README.md`) |
 | `docs/` | Architecture docs, API docs, MQTT/Kafka topic specs, ADRs, testing strategy, experiment methodology |
@@ -78,12 +79,12 @@ and current implementation status.
 
 ## Status
 
-**Phases 1–12 complete — a self-healing fleet you can watch, measure,
-and no longer break by accident.** A device that dies is detected, replaced,
+**All thirteen phases complete.** A device that dies is detected, replaced,
 and back online without anyone touching it; Prometheus and Grafana show it
-happening; Phase 11 recorded the first real results; and Phase 12 puts a gate
-in front of every change. Every module is implemented, tested, and runnable,
-and the whole suite passes against a real broker.
+happening; Phase 11 recorded the first real results; Phase 12 puts a gate in
+front of every change; and Phase 13 reconciles the platform from git — while
+deliberately keeping its hands off the fleet. Every module is implemented,
+tested, and runnable, and the whole suite passes against a real broker.
 
 Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
 database need a server, and the phase that supplies servers came after both
@@ -175,6 +176,18 @@ CI produces no numbers. Shared runners of unstated hardware cannot satisfy the
 reproducibility contract, so there is no benchmark job and the smoke test
 asserts behaviour rather than latency.
 
+**The platform reconciles itself from git — and stops at the fleet.** Argo CD
+manages the broker, gateway, Kafka, operator and monitoring: change a manifest
+in this repository and the cluster follows; change the cluster by hand and Argo
+puts it back. The device pods are outside that boundary on purpose. A device
+that fails is *supposed* to be missing from the cluster while still declared in
+git, and a controller with self-heal would restore it in about a second — from
+the wrong component, making the recorded MTTR a measurement of Argo's sync loop
+rather than the recovery loop. So no Application's path includes the device
+manifests, and the AppProject refuses to manage a Pod at all, which turns a
+convention into a rule
+([ADR-016](docs/decisions/ADR-016-gitops-boundary.md)).
+
 ## Development phases
 
 Build order is strict — never start a phase before the previous one has a
@@ -193,7 +206,7 @@ working, tested demonstration. This numbering is canonical and matches
 - [x] Phase 10 — Observability (Prometheus / Grafana)
 - [x] Phase 11 — Chaos experiments
 - [x] Phase 12 — CI/CD
-- [ ] Phase 13 — GitOps (optional)
+- [x] Phase 13 — GitOps (optional)
 
 ### Evaluation workstream
 
@@ -230,7 +243,7 @@ installed and the default on `PATH` is not the pinned one:
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 ```
 
-Deferred until the phase that needs them: `helm` (Phase 13, optional).
+Argo CD `v3.4.8` (core install) arrived with Phase 13; `helm` is installed but unused (ADR-016).
 `kind` 0.32.0 and `kubectl` v1.36.1 arrived with Phase 8.
 
 ## How to run
