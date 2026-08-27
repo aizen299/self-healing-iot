@@ -18,7 +18,7 @@ a commit to `main`.
 | `bootstrap.sh` | Installs Argo CD (core) and applies the root Application. Also `--uninstall`. Refuses to start if the manifests name a different repository than your `origin`, if the revision is not on the remote, or if a different Argo CD is already installed — and exits non-zero if the Applications do not reach `Synced`. |
 | `project.yaml` | The `fleet` AppProject: one repo, two namespaces, and **no Pods**. |
 | `root.yaml` | The app-of-apps. Its source is `apps/`, so adding a component is a commit. |
-| `apps/*.yaml` | One Application per `deploy.sh` flag — platform, kafka, recovery, monitoring. |
+| `apps/*.yaml` | One Application per `deploy.sh` flag — platform, kafka, recovery, monitoring. Sync waves order them: the platform app declares the namespace the others are created in, so it lands first. |
 
 ## The boundary
 
@@ -71,6 +71,16 @@ On the kind cluster, with the full stack and the recovery operator running:
 Those are demonstrations, not results. Nothing here produced a number, which
 is why there is no run under `experiments/` for it — the recorded MTTR figures
 come from Phase 11 and from nowhere else.
+
+## What CI checks
+
+`kubeconform` has no schema for `Application` or `AppProject`, so a green
+manifest job proves only that these files are YAML. `.github/scripts/assert-
+gitops-sane.py` checks what actually goes wrong with them: a `path` that is not
+a directory in this repository, manifests disagreeing about the repository or
+the project, a `targetRevision` left on a branch, a missing sync wave, and a
+managed path that has acquired a bare Pod. That last one is the ADR-016
+boundary, failing in review instead of at sync time.
 
 ## Forking
 

@@ -191,6 +191,14 @@ MQTT integration tests skip themselves when no broker is listening, so
 verified with a broker running. The wire contract is
 `docs/api/mqtt-topics.md`.
 
+The gateway is a **singleton** and cannot be scaled: it holds the device
+registry in memory, takes an exclusive lock on the embedded store, and connects
+to the broker under one client id. A second replica evicts the first from the
+broker and is evicted back, and while disconnected each declares healthy
+devices failed. `replicas: 1` and `strategy: Recreate` are both load-bearing;
+`ConnectionFlapDetector` logs the explanation after the third dropped
+connection in a minute.
+
 The gateway ingests, validates, serves fleet state on an HTTP API, and
 detects failures. `/health`, `/ready` and `/metrics` all answer different
 questions. `/health` and `/ready` answer different questions and
@@ -214,7 +222,11 @@ reproducibility contract below is unchanged, and a Grafana screenshot is
 precisely the artefact that gets mistaken for one.
 
 A device never heard from stays `UNKNOWN` and is never declared failed,
-which is what keeps retained-presence ghosts out of the recovery path.
+which is what keeps retained-presence ghosts out of the recovery path. A will
+that fires for a device already marked `OFFLINE` **is** still reported, though,
+because the earlier `OFFLINE` may have been a false timeout that produced no
+replacement — the signal is the presence edge, not the health edge (ADR-006,
+amended).
 `devicesKnown` counts those ghosts; use `devicesReporting` for the real
 fleet.
 
@@ -354,7 +366,7 @@ duplicate the wire format.
 | `docs/architecture/`, `docs/api/`, `docs/experiments/` | Architecture docs, gateway API docs, experiment writeups — written to describe what exists, not what's planned |
 | `tests/integration`, `tests/e2e` | Cross-module suites — see testing requirements below |
 | `tests/unit` | Reserved for cross-module unit-level suites; currently empty. Per-module unit tests live in each module's `src/test/java` |
-| `.github/workflows/`, `.github/scripts/` | CI pipeline and the checks it runs. `assert-suite-complete.py` is the gate that a skipped test cannot pass |
+| `.github/workflows/`, `.github/scripts/` | CI pipeline and the checks it runs. `assert-suite-complete.py` is the gate that a skipped test cannot pass; `assert-gitops-sane.py` checks the Argo manifests kubeconform has no schema for |
 
 Each module's own `README.md` is the source of truth for that module's
 current implementation status; keep it updated as phases land there.

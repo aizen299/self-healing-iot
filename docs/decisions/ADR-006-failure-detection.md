@@ -122,6 +122,50 @@ Phase 9 provisioning a replacement for something that does not exist. The
 demonstration run shows eight such ghosts sitting in `UNKNOWN` while three
 real devices are correctly declared `OFFLINE`.
 
+### A will is evidence even for a device already declared failed
+
+Amended 2026-08-28, after the case below was watched happening.
+
+Health is a state and failure detection is edge-triggered on it, so a device
+already in `OFFLINE` cannot transition to `OFFLINE` again and emits nothing.
+That is correct when the device really is the one already reported. It is
+wrong when the earlier `OFFLINE` was never true.
+
+Which happens. A gateway that loses its own broker connection stops receiving
+heartbeats it should have received and declares the whole fleet failed — three
+false failures, in the run that exposed this. The operator handled them
+correctly, answering `NOT_NEEDED` for each because the pods were plainly
+running, so no replacement was created and none was needed. But every device
+was now marked `OFFLINE` while alive. When one of them genuinely died, the
+broker's will was the only evidence anyone would get, and the state machine
+swallowed it. The device stayed dead, unreported and unreplaced, for as long
+as it was watched.
+
+So a will that fires for a device **whose presence was `ONLINE`** is reported
+as a failure regardless of the health it was already in. The signal is the
+presence edge rather than the health edge, which is what keeps the two guards
+this must not break:
+
+- A retained will replayed to a freshly started gateway does not fire, because
+  that gateway never saw the device `ONLINE` on its connection. Retained
+  presence ghosts stay out of the recovery path, as below.
+- A redelivered will does not fire twice, because the second one finds the
+  presence already `OFFLINE`.
+
+The transition it produces is `OFFLINE → OFFLINE`, which reads oddly and is
+accurate: the device was already believed down, and the broker has now
+confirmed it is gone. Recovery stays idempotent because the operator derives
+the replacement's name from the detection time (ADR-011), so this asks for a
+pod that the earlier detection never created.
+
+The deeper lesson is about the seam rather than the bug. The gateway decides a
+device has failed; the operator decides whether to replace it; and the
+operator's `NOT_NEEDED` never travels back. The gateway therefore cannot know
+that a device it reported was left unreplaced, and edge-triggering on its own
+state assumed it did. Closing that properly would mean the operator's outcome
+feeding back into the gateway's model of the fleet, which is a larger change
+than this one and is not made here.
+
 ## Consequences
 - Positive: the two detection paths together cover both clean death and
   partial wedging, and the test suite distinguishes them — including a test
