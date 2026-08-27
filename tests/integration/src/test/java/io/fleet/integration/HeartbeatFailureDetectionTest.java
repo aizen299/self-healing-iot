@@ -21,7 +21,6 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
 import java.util.Map;
-import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -83,8 +82,12 @@ class HeartbeatFailureDetectionTest {
 
                 harness.start();
 
-                awaitUntil(() -> healthOf(registry, deviceId) == DeviceHealth.ONLINE);
-                awaitUntil(() -> healthOf(registry, deviceId) == DeviceHealth.OFFLINE);
+                Await.until(deviceId + " to reach ONLINE",
+                        () -> healthOf(registry, deviceId) == DeviceHealth.ONLINE,
+                        () -> "health is " + healthOf(registry, deviceId));
+                Await.until(deviceId + " to be declared OFFLINE by heartbeat timeout",
+                        () -> healthOf(registry, deviceId) == DeviceHealth.OFFLINE,
+                        () -> "health is " + healthOf(registry, deviceId));
 
                 assertEquals(1L, metrics.failuresDetectedCount());
 
@@ -96,8 +99,10 @@ class HeartbeatFailureDetectionTest {
                         "the connection never dropped, so no Last Will can have fired");
 
                 long acceptedAtFailure = record.telemetryAccepted();
-                awaitUntil(() -> registry.find(deviceId).orElseThrow().telemetryAccepted()
-                        > acceptedAtFailure);
+                Await.until("telemetry to keep arriving from the wedged device",
+                        () -> registry.find(deviceId).orElseThrow().telemetryAccepted()
+                                > acceptedAtFailure,
+                        () -> "still at " + acceptedAtFailure + " readings");
                 assertTrue(registry.find(deviceId).orElseThrow().telemetryAccepted()
                                 > acceptedAtFailure,
                         "telemetry keeps flowing, so traffic alone would have looked healthy");
@@ -138,7 +143,9 @@ class HeartbeatFailureDetectionTest {
                  FleetHarness harness = new FleetHarness(deviceConfig, sinks)) {
 
                 harness.start();
-                awaitUntil(() -> healthOf(registry, prefix + "-003") == DeviceHealth.ONLINE);
+                Await.until(prefix + "-003 to reach ONLINE",
+                        () -> healthOf(registry, prefix + "-003") == DeviceHealth.ONLINE,
+                        () -> "health is " + healthOf(registry, prefix + "-003"));
 
                 // Well past the offline threshold: a false positive here would
                 // mean the fleet recovers healthy devices in Phase 9.
@@ -152,6 +159,75 @@ class HeartbeatFailureDetectionTest {
                 }
             }
         }
+    }
+
+    @Test
+    @DisplayName("a fleet that stops on purpose is not declared failed")
+    void cleanShutdownIsNotAFailure() throws Exception {
+        // The claim this test exists to check used to live in
+        // MqttToGatewayTest, asserted against metrics.failuresDetectedCount()
+        // — in a test that builds no HealthMonitor. Nothing there could ever
+        // increment that counter, so the assertion passed unconditionally and
+        // the behaviour was never covered at all. It needs the monitor, so it
+        // belongs here.
+        String prefix = "bye" + System.nanoTime();
+        DeviceRegistry registry = new DeviceRegistry();
+        GatewayMetrics metrics = new GatewayMetrics();
+        GatewayConfig gatewayConfig = gatewayConfig();
+
+        try (MqttIngestor ingestor = new MqttIngestor(gatewayConfig, registry, metrics);
+             HealthMonitor monitor = new HealthMonitor(registry, gatewayConfig.healthPolicy(),
+                     metrics, ingestor, gatewayConfig.monitorIntervalMillis())) {
+
+            ingestor.onTransition(monitor::announce);
+            ingestor.start();
+            monitor.start();
+
+            DeviceConfig deviceConfig = DeviceConfig.from(Map.of(
+                    "FLEET_SINK", "mqtt",
+                    "FLEET_DEVICE_COUNT", "3",
+                    "FLEET_DEVICE_ID_PREFIX", prefix,
+                    "FLEET_PUBLISH_INTERVAL_MS", PUBLISH_INTERVAL_MS));
+
+            try (MqttSinkFactory sinks = new MqttSinkFactory(MqttConfig.from(
+                         Map.of("MQTT_BROKER_URL", BROKER,
+                                "MQTT_CLIENT_ID_PREFIX", "bye" + System.nanoTime())));
+                 FleetHarness harness = new FleetHarness(deviceConfig, sinks)) {
+
+                harness.start();
+                Await.until(prefix + "-003 to reach ONLINE",
+                        () -> healthOf(registry, prefix + "-003") == DeviceHealth.ONLINE,
+                        () -> "health is " + healthOf(registry, prefix + "-003"));
+            }
+
+            // Closing the harness stops all three deliberately, so each
+            // publishes a retained SHUTDOWN rather than dying into its will.
+            Await.until("all three devices to publish a retained SHUTDOWN",
+                    () -> shutdownCount(registry, prefix) == 3L,
+                    () -> shutdownCount(registry, prefix) + " of 3 have");
+
+            // Well past the threshold: a stopped device goes silent, and
+            // silence is what the monitor declares failures on. It must not
+            // declare one here, because the device said it was leaving —
+            // SHUTDOWN retires it rather than putting it under watch.
+            Thread.sleep(gatewayConfig.healthPolicy().offlineThresholdMillis() * 2);
+
+            assertEquals(0L, metrics.failuresDetectedCount(),
+                    "a fleet stopped on purpose must never be declared failed");
+            for (int i = 1; i <= 3; i++) {
+                String id = prefix + "-00" + i;
+                assertNotEquals(DeviceHealth.OFFLINE, healthOf(registry, id),
+                        id + " stopped deliberately and must not be marked OFFLINE");
+            }
+        }
+    }
+
+    /** How many of this test's devices have announced a deliberate stop. */
+    private static long shutdownCount(DeviceRegistry registry, String prefix) {
+        return registry.all().stream()
+                .filter(record -> record.deviceId().startsWith(prefix))
+                .filter(record -> record.presence() == Presence.SHUTDOWN)
+                .count();
     }
 
     private static GatewayConfig gatewayConfig() {
@@ -181,19 +257,4 @@ class HeartbeatFailureDetectionTest {
         }
     }
 
-    private static void awaitUntil(BooleanSupplier condition) {
-        long deadline = System.currentTimeMillis() + 15_000L;
-        while (System.currentTimeMillis() < deadline) {
-            if (condition.getAsBoolean()) {
-                return;
-            }
-            try {
-                Thread.sleep(20L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new AssertionError("interrupted while awaiting condition", e);
-            }
-        }
-        throw new AssertionError("condition not met within 15s");
-    }
 }

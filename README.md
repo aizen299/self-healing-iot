@@ -1,5 +1,7 @@
 # Self-Healing Edge/IoT Fleet Platform
 
+[![CI](https://github.com/aizen299/self-healing-iot/actions/workflows/ci.yml/badge.svg)](https://github.com/aizen299/self-healing-iot/actions/workflows/ci.yml)
+
 Advanced Java semester project: a simulated fleet of resource-constrained
 IoT/edge devices that communicate over MQTT, are monitored by a Java
 gateway, stream telemetry and failure events through Kafka, persist
@@ -69,16 +71,19 @@ Full architecture detail lives in `docs/architecture/`.
 | `experiments/` | Reproducible experiment configs, scripts, and raw/processed results (see `experiments/README.md`) |
 | `docs/` | Architecture docs, API docs, MQTT/Kafka topic specs, ADRs, testing strategy, experiment methodology |
 | `tests/unit`, `tests/integration`, `tests/e2e` | Cross-module test suites |
-| `.github/workflows/` | CI pipeline (added in the CI/CD phase) |
+| `.github/workflows/` | CI: tests against a real broker, shell-script checks, image build and smoke test ([ADR-014](docs/decisions/ADR-014-continuous-integration-shape.md)) |
 
 Each module directory has its own `README.md` describing its responsibility
 and current implementation status.
 
 ## Status
 
-**Phases 1–9 complete — a self-healing fleet.** A device that dies is
-detected, replaced, and back online without anyone touching it. Every
-module is implemented, tested, and runnable; 204 tests pass.
+**Phases 1–12 complete — a self-healing fleet you can watch, measure,
+and no longer break by accident.** A device that dies is detected, replaced,
+and back online without anyone touching it; Prometheus and Grafana show it
+happening; Phase 11 recorded the first real results; and Phase 12 puts a gate
+in front of every change. Every module is implemented, tested, and runnable,
+and the whole suite passes against a real broker.
 
 Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
 database need a server, and the phase that supplies servers came after both
@@ -135,6 +140,41 @@ server to create a pod that already exists and is refused — a guarantee that
 survives the operator crashing, which an in-memory ledger would not
 ([ADR-011](docs/decisions/ADR-011-recovery-operator-shape.md)).
 
+**The fleet is observable.** The gateway and the operator each expose
+Prometheus text on their own endpoint, hand-written rather than taken from a
+client library, and a provisioned Grafana dashboard shows fleet state,
+detection and recovery in one place. Scrape the gateway through its admin
+port, never through the main one: readiness withdraws the main port during a
+broker outage, which is exactly when the dashboard matters
+([ADR-012](docs/decisions/ADR-012-observability-shape.md)). Nothing on the
+dashboard is a result — a screenshot is precisely the artefact that gets
+mistaken for one.
+
+**The recovery loop has been measured.** Phase 11 injected 20 pod-loss
+failures into a running cluster and recorded what happened:
+**20/20 recovered**, with a **median MTTR of 1332.5 ms** (p90 1602 ms), of
+which the operator's own share — decide, then get the API server to accept a
+replacement — is 6.4%. The rest is a JVM starting and reconnecting. Two runs
+before it were discarded for a broken apparatus rather than a bad result. This
+is the project's only recorded result so far; Pillars A and C are still
+unmeasured and the writeups say so
+([pillar-b-recovery.md](docs/experiments/pillar-b-recovery.md),
+[ADR-013](docs/decisions/ADR-013-chaos-and-where-results-come-from.md)).
+
+**Every change now passes a gate.** CI builds and tests against a real broker
+on each pull request, checks the shell scripts that make up the experiment
+apparatus, and builds the container images and smoke-tests the stack. The
+check that matters is not that the build passed but that the *suite ran
+complete*: the MQTT suites skip themselves when no broker is listening — the
+whole MQTT wire path and heartbeat detection — and a skipped test reports
+success. CI fails on a skip, quoting the reason the test gave, so a broker
+that never started can no longer produce a green run that covered nothing
+([ADR-014](docs/decisions/ADR-014-continuous-integration-shape.md)).
+
+CI produces no numbers. Shared runners of unstated hardware cannot satisfy the
+reproducibility contract, so there is no benchmark job and the smoke test
+asserts behaviour rather than latency.
+
 ## Development phases
 
 Build order is strict — never start a phase before the previous one has a
@@ -150,9 +190,9 @@ working, tested demonstration. This numbering is canonical and matches
 - [x] Phase 7 — Containerization (Docker) — *taken before Phase 6, see ADR-008*
 - [x] Phase 8 — Kubernetes deployment
 - [x] Phase 9 — Automatic recovery (operator)
-- [ ] Phase 10 — Observability (Prometheus / Grafana)
-- [ ] Phase 11 — Chaos experiments
-- [ ] Phase 12 — CI/CD
+- [x] Phase 10 — Observability (Prometheus / Grafana)
+- [x] Phase 11 — Chaos experiments
+- [x] Phase 12 — CI/CD
 - [ ] Phase 13 — GitOps (optional)
 
 ### Evaluation workstream
@@ -164,7 +204,7 @@ feature set. It attaches to the build phases as follows:
 | Pillar | Measured | Depends on |
 |---|---|---|
 | A — Constrained vs. naive Java under an identical heap cap | heap usage, GC behavior, CPU, throughput, latency | Phase 1 (both variants exist); repeated after Phase 7 to confirm containerized runs match |
-| B — Automated failure detection and recovery | MTTR, recovery success rate | Phases 4 and 9; exercised systematically in Phase 11 |
+| B — **measured** ([writeup](docs/experiments/pillar-b-recovery.md)) — automated failure detection and recovery | MTTR, recovery success rate | Phases 4 and 9; measured in Phase 11 |
 | C — Fleet scalability | messages/sec, gateway CPU/memory, detection and recovery latency vs. device count | Phases 3–6, re-run after Phase 8 |
 
 Every run must satisfy the reproducibility contract in
@@ -251,6 +291,37 @@ runs should not need a broker.
 The run summary is a **demonstration, not a result** — figures count only
 when produced by a run recorded under `experiments/results/` with its
 configuration attached.
+
+## Continuous integration
+
+Every pull request runs the build and the full test suite against a real
+Mosquitto broker; ShellCheck and `actionlint` over the scripts and the
+workflow; `kubeconform` over the Kubernetes manifests; and an image build plus
+a smoke test of the containerised stack. The same gate runs locally:
+
+```bash
+docker compose up -d --wait broker
+```
+
+```bash
+mvn -B verify && python3 .github/scripts/assert-suite-complete.py
+```
+
+The second command is the part that is easy to skip and shouldn't be. `mvn`
+exits 0 when tests are skipped, and the MQTT suites skip themselves when no
+broker is reachable — so a green build alone does not mean the MQTT path was
+tested. The assertion fails unless every module reported and nothing was
+skipped, and it quotes the reason each skipped test gave. It also rejects a
+report left behind by an earlier run, since surefire never deletes one.
+
+Images are published to GHCR only when a `v*` tag is pushed, with immutable
+version and commit tags and no `:latest`. Merging to main publishes nothing;
+there is no environment to continuously deploy to, and
+[ADR-014](docs/decisions/ADR-014-continuous-integration-shape.md) records why
+that is a decision rather than an omission.
+
+Note that the smoke test cannot run while the kind cluster is up — both
+publish the gateway on host 18080.
 
 ## Documentation
 
