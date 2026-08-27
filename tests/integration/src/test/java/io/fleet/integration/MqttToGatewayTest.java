@@ -94,7 +94,21 @@ class MqttToGatewayTest {
             // Closing the fleet is an orderly shutdown, so each device publishes
             // retained SHUTDOWN — not the OFFLINE the broker would publish as a
             // will — and the gateway must not read that as a failure.
-            awaitUntil(() -> presenceOf(registry, prefix + "-001") == Presence.SHUTDOWN);
+            //
+            // The wait is on the whole fleet, not on -001. Presence rides each
+            // device's own connection (ADR-004), so three devices publish three
+            // SHUTDOWNs independently and one arriving says nothing about the
+            // other two — while the count below covers all three. That gap is
+            // invisible on an idle laptop and a flaky failure on a loaded CI
+            // runner, which is where it first showed up.
+            awaitUntil(() -> registry.onlineCount() == 0L);
+
+            // Asserted rather than awaited: once nothing is online, a device
+            // sitting at OFFLINE means the broker published its will and the
+            // gateway read a deliberate stop as a failure. Waiting for SHUTDOWN
+            // would report that as a timeout with nothing to say about why.
+            assertEquals(Presence.SHUTDOWN, presenceOf(registry, prefix + "-001"),
+                    "a clean stop is SHUTDOWN, not the will the broker sends for a death");
             assertEquals(0L, registry.onlineCount(),
                     "no device should still be reported online after a clean shutdown");
             assertEquals(0L, metrics.failuresDetectedCount(),
