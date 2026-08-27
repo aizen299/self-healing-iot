@@ -86,8 +86,16 @@ public record DeviceRecord(
     public DeviceRecord withPresence(Presence newPresence, long atMillis, HealthPolicy policy) {
         DeviceHealth next = policy.afterPresence(health, newPresence);
         boolean retired = newPresence == Presence.SHUTDOWN;
+
+        // A will that fires for a device we had seen connected is fresh
+        // evidence of a death, whatever we already believed about its health.
+        // That distinction decides where the offline clock starts, and the
+        // clock is what MTTR is measured from.
+        boolean confirmedDeath =
+                presence == Presence.ONLINE && newPresence == Presence.OFFLINE;
+
         return new DeviceRecord(deviceId, next, changedAt(next, atMillis),
-                offlineSince(next, atMillis),
+                offlineSince(next, atMillis, confirmedDeath),
                 retired ? 0L : lastHeartbeatAtMillis,
                 retired ? 0 : consecutiveHeartbeats,
                 newPresence, atMillis,
@@ -119,14 +127,28 @@ public record DeviceRecord(
         return next == health ? healthChangedAtMillis : atMillis;
     }
 
+    private long offlineSince(DeviceHealth next, long atMillis) {
+        return offlineSince(next, atMillis, false);
+    }
+
     /**
      * Kept from the moment of failure until the device is confirmed healthy
      * again — including through RECOVERING, so the duration is still available
      * when the recovery completes.
+     *
+     * <p>{@code confirmedDeath} restarts it. A device already in
+     * {@code OFFLINE} normally keeps its original detection time, which is
+     * right while that detection is the one still being answered. It is wrong
+     * once the broker's will has confirmed a <em>new</em> death: the earlier
+     * detection may have been a false timeout that produced no replacement
+     * (ADR-006, amended), and the recovery that follows this one would then be
+     * timed from a moment minutes earlier — inflating the very number Pillar B
+     * reports as MTTR.
      */
-    private long offlineSince(DeviceHealth next, long atMillis) {
+    private long offlineSince(DeviceHealth next, long atMillis, boolean confirmedDeath) {
         if (next == DeviceHealth.OFFLINE) {
-            return health == DeviceHealth.OFFLINE ? offlineSinceMillis : atMillis;
+            boolean keepExisting = health == DeviceHealth.OFFLINE && !confirmedDeath;
+            return keepExisting ? offlineSinceMillis : atMillis;
         }
         return next.isHealthy() ? 0L : offlineSinceMillis;
     }

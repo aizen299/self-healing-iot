@@ -173,11 +173,54 @@ class DeviceRegistryTest {
         registry.recordHeartbeat("device-001", 1_100L, policy);
         registry.evaluateSilence(policy, 1_000L + policy.offlineThresholdMillis() * 2);
 
-        Optional<HealthTransition> transition =
-                registry.recordPresence("device-001", Presence.SHUTDOWN, 9_000L, policy);
+        HealthTransition transition = registry
+                .recordPresence("device-001", Presence.SHUTDOWN, 9_000L, policy)
+                .orElseThrow(() -> new AssertionError(
+                        "a deliberate stop is still a state change worth announcing"));
 
-        assertTrue(transition.isEmpty() || !transition.get().isFailure(),
+        assertFalse(transition.isFailure(),
                 "stopping on purpose is not a failure (ADR-006)");
+        assertEquals(DeviceHealth.UNKNOWN, transition.to(),
+                "SHUTDOWN retires the device rather than failing it");
+    }
+
+    @Test
+    @DisplayName("a confirmed death restarts the offline clock it is timed from")
+    void aConfirmedDeathRestartsTheOfflineClock() {
+        // The defect this covers is not that the failure goes unreported — the
+        // test above covers that — but that the recovery which follows would be
+        // timed from the earlier false detection. MTTR is the number that comes
+        // out of this, so a stale clock here inflates Pillar B's headline
+        // figure by however long the device was wrongly believed dead.
+        registry.recordPresence("device-001", Presence.ONLINE, 1_000L, policy);
+        registry.recordHeartbeat("device-001", 1_000L, policy);
+        registry.recordHeartbeat("device-001", 1_100L, policy);
+
+        long falseDetection = 1_000L + policy.offlineThresholdMillis() * 2;
+        registry.evaluateSilence(policy, falseDetection);
+        assertEquals(DeviceHealth.OFFLINE, health("device-001"));
+
+        // Three minutes of being wrongly marked down while perfectly alive,
+        // and then it actually dies.
+        long realDeath = falseDetection + 180_000L;
+        registry.recordPresence("device-001", Presence.OFFLINE, realDeath, policy);
+
+        assertEquals(realDeath,
+                registry.find("device-001").orElseThrow().offlineSinceMillis(),
+                "the clock must start at the death the broker confirmed, not at "
+                        + "the timeout that was never true");
+
+        // The replacement comes up and is confirmed. That is the transition
+        // whose duration is reported as MTTR.
+        registry.recordPresence("device-001", Presence.ONLINE, realDeath + 1_000L, policy);
+        registry.recordHeartbeat("device-001", realDeath + 1_100L, policy);
+        HealthTransition recovery = registry
+                .recordHeartbeat("device-001", realDeath + 1_300L, policy)
+                .orElseThrow();
+
+        assertTrue(recovery.isRecovery());
+        assertEquals(1_300L, recovery.recoveryDurationMillis(),
+                "detection-to-confirmation, not the false window plus it");
     }
 
     private DeviceHealth health(String deviceId) {

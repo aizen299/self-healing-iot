@@ -1,7 +1,7 @@
 package io.fleet.gateway;
 
-import java.time.Clock;
 import java.util.Optional;
+import java.util.function.LongSupplier;
 
 /**
  * Notices when the broker connection is dropping repeatedly and says why.
@@ -33,17 +33,31 @@ final class ConnectionFlapDetector {
     /** Long enough to span a broker restart's reconnect, short enough to mean something. */
     static final long WINDOW_MILLIS = 60_000L;
 
+    private static final long WINDOW_NANOS = WINDOW_MILLIS * 1_000_000L;
+
     /** One loss is noise, two is bad luck, three in a minute is a pattern. */
     static final int THRESHOLD = 3;
 
-    private final Clock clock;
+    /**
+     * A monotonic timer, not a wall clock, and the difference is not academic
+     * here any more than it was in {@code LazyResource}: an NTP correction or
+     * a VM resynchronising after the host sleeps moves {@code Clock.millis()}
+     * by minutes in either direction. A forward step would expire this window
+     * early and discard the losses counted so far, so the one eviction loop
+     * this exists to name would go unreported.
+     */
+    private final LongSupplier nanoTime;
 
-    private long windowStartMillis;
+    private long windowStartNanos;
     private int lossesInWindow;
     private boolean reported;
 
-    ConnectionFlapDetector(Clock clock) {
-        this.clock = clock;
+    ConnectionFlapDetector() {
+        this(System::nanoTime);
+    }
+
+    ConnectionFlapDetector(LongSupplier nanoTime) {
+        this.nanoTime = nanoTime;
     }
 
     /**
@@ -53,9 +67,11 @@ final class ConnectionFlapDetector {
      *         losses are still within what a restarting broker would explain
      */
     synchronized Optional<String> recordLoss(String clientId) {
-        long now = clock.millis();
-        if (lossesInWindow == 0 || now - windowStartMillis > WINDOW_MILLIS) {
-            windowStartMillis = now;
+        // Compared by subtraction, so it holds across nanoTime's arbitrary
+        // origin and its eventual wrap.
+        long now = nanoTime.getAsLong();
+        if (lossesInWindow == 0 || now - windowStartNanos > WINDOW_NANOS) {
+            windowStartNanos = now;
             lossesInWindow = 0;
             reported = false;
         }
@@ -71,9 +87,8 @@ final class ConnectionFlapDetector {
                         + " using the same client id '" + clientId + "': a broker"
                         + " disconnects the older session when a client reconnects with"
                         + " an id already in use, so two gateways evict each other in a"
-                        + " loop. The gateway is a singleton — check that nothing has"
-                        + " scaled it (kubectl -n fleet get deploy gateway). While"
-                        + " disconnected it misses heartbeats and will declare healthy"
-                        + " devices failed.");
+                        + " loop. The gateway is a singleton: check that only one"
+                        + " instance is running. While disconnected it misses"
+                        + " heartbeats and will declare healthy devices failed.");
     }
 }

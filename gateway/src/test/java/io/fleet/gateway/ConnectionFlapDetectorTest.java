@@ -3,50 +3,36 @@ package io.fleet.gateway;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConnectionFlapDetectorTest {
 
-    /** A clock the test moves by hand, so nothing here waits on real time. */
-    private static final class MovableClock extends Clock {
-        // Starts at a large value rather than 0: the detector compares
-        // timestamps by subtraction, and a window that only works because the
-        // epoch happens to be zero is not a window.
-        private long millis = 1_787_000_000_000L;
+    /**
+     * A monotonic timer the test moves by hand.
+     *
+     * <p>Starts negative on purpose. {@code System.nanoTime}'s origin is
+     * arbitrary and routinely negative on a freshly booted machine, so a
+     * detector that only works because its first reading happened to be
+     * positive is not one that works.
+     */
+    private static final class MovableTimer implements LongSupplier {
+        private long nanos = -TimeUnit.HOURS.toNanos(3);
 
-        void advance(long by) {
-            millis += by;
+        void advanceMillis(long by) {
+            nanos += TimeUnit.MILLISECONDS.toNanos(by);
         }
 
         @Override
-        public long millis() {
-            return millis;
-        }
-
-        @Override
-        public Instant instant() {
-            return Instant.ofEpochMilli(millis);
-        }
-
-        @Override
-        public ZoneOffset getZone() {
-            return ZoneOffset.UTC;
-        }
-
-        @Override
-        public Clock withZone(java.time.ZoneId zone) {
-            return this;
+        public long getAsLong() {
+            return nanos;
         }
     }
 
-    private final MovableClock clock = new MovableClock();
+    private final MovableTimer clock = new MovableTimer();
     private final ConnectionFlapDetector detector = new ConnectionFlapDetector(clock);
 
     @Test
@@ -66,9 +52,9 @@ class ConnectionFlapDetectorTest {
     @DisplayName("three losses in a minute name the likely cause")
     void threeLossesInAWindowExplainThemselves() {
         detector.recordLoss("gw-1");
-        clock.advance(1_000L);
+        clock.advanceMillis(1_000L);
         detector.recordLoss("gw-1");
-        clock.advance(1_000L);
+        clock.advanceMillis(1_000L);
 
         Optional<String> warning = detector.recordLoss("gw-1");
 
@@ -95,7 +81,7 @@ class ConnectionFlapDetectorTest {
         for (int i = 0; i < 10; i++) {
             assertTrue(detector.recordLoss("gw-1").isEmpty(),
                     "a loss an hour is not a flap");
-            clock.advance(ConnectionFlapDetector.WINDOW_MILLIS + 1L);
+            clock.advanceMillis(ConnectionFlapDetector.WINDOW_MILLIS + 1L);
         }
     }
 
@@ -105,7 +91,7 @@ class ConnectionFlapDetectorTest {
         for (int i = 0; i < ConnectionFlapDetector.THRESHOLD; i++) {
             detector.recordLoss("gw-1");
         }
-        clock.advance(ConnectionFlapDetector.WINDOW_MILLIS * 2);
+        clock.advanceMillis(ConnectionFlapDetector.WINDOW_MILLIS * 2);
 
         assertTrue(detector.recordLoss("gw-1").isEmpty());
         assertTrue(detector.recordLoss("gw-1").isEmpty());
@@ -114,15 +100,30 @@ class ConnectionFlapDetectorTest {
     }
 
     @Test
-    @DisplayName("the window is measured, not assumed")
+    @DisplayName("losses on either side of the boundary do not add up")
     void theWindowBoundaryHolds() {
         detector.recordLoss("gw-1");
         detector.recordLoss("gw-1");
-        clock.advance(ConnectionFlapDetector.WINDOW_MILLIS + 1L);
+        clock.advanceMillis(ConnectionFlapDetector.WINDOW_MILLIS + 1L);
 
-        // The window has expired, so this is the first loss of a new one.
+        // Two before the boundary and one after is not three in a window, so
+        // this must stay quiet — and it must take a full THRESHOLD more to
+        // speak, which is what the next two lines prove.
+        assertTrue(detector.recordLoss("gw-1").isEmpty(),
+                "the two losses before the boundary belong to a window that has closed");
         assertTrue(detector.recordLoss("gw-1").isEmpty());
-        assertEquals(60_000L, ConnectionFlapDetector.WINDOW_MILLIS);
-        assertFalse(ConnectionFlapDetector.THRESHOLD < 2);
+        assertTrue(detector.recordLoss("gw-1").isPresent(),
+                "three inside the new window is a pattern again");
+    }
+
+    @Test
+    @DisplayName("a loss just inside the boundary still counts")
+    void aLossJustInsideTheWindowStillCounts() {
+        detector.recordLoss("gw-1");
+        detector.recordLoss("gw-1");
+        clock.advanceMillis(ConnectionFlapDetector.WINDOW_MILLIS - 1L);
+
+        assertTrue(detector.recordLoss("gw-1").isPresent(),
+                "still inside the window, so this is the third and it should speak");
     }
 }
