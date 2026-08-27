@@ -112,8 +112,11 @@ The AppProject also sets `namespaceResourceBlacklist` on `Pod`, so pointing an
 Application at `fleet/` fails rather than quietly working. **Never put the
 device manifests under GitOps management.**
 
-Once bootstrapped, a hand-applied edit to a managed manifest is drift and is
-reverted within seconds — commit it, or `bootstrap.sh --uninstall` first.
+Once bootstrapped, Argo owns the fields the managed manifests **declare**: a
+hand edit to one is reverted on the next reconcile, so commit it or
+`bootstrap.sh --uninstall` first. Fields the manifests do not declare are left
+to whoever set them — which is why `deploy.sh`'s `rollout restart` still works,
+and why self-heal will not undo a `kubectl set env`.
 Images and device pods stay with `deploy.sh`: Argo applies manifests and
 neither builds nor loads images, and `kind` has no registry.
 

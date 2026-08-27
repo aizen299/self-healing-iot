@@ -15,7 +15,7 @@ a commit to `main`.
 
 | File | What it is |
 |---|---|
-| `bootstrap.sh` | Installs Argo CD (core) and applies the root Application. Also `--uninstall`. |
+| `bootstrap.sh` | Installs Argo CD (core) and applies the root Application. Also `--uninstall`. Refuses to start if the manifests name a different repository than your `origin`, if the revision is not on the remote, or if a different Argo CD is already installed — and exits non-zero if the Applications do not reach `Synced`. |
 | `project.yaml` | The `fleet` AppProject: one repo, two namespaces, and **no Pods**. |
 | `root.yaml` | The app-of-apps. Its source is `apps/`, so adding a component is a commit. |
 | `apps/*.yaml` | One Application per `deploy.sh` flag — platform, kafka, recovery, monitoring. |
@@ -57,8 +57,8 @@ the rule costs the platform nothing and closes the one door that matters.
 On the kind cluster, with the full stack and the recovery operator running:
 
 - **Reconciliation.** `kubectl scale deployment/gateway --replicas=3` was
-  detected within ten seconds and reverted to the declared single replica
-  about nineteen seconds after the drift was introduced.
+  detected and reverted to the declared single replica automatically, well
+  inside a minute.
 - **The fleet is left alone.** Git declares `edge-device-001/002/003`. The
   live fleet at the time contained `device-002-r-0194b194ba`, a replacement
   the operator had built. Every Application reported `Synced` throughout — Argo
@@ -72,6 +72,16 @@ Those are demonstrations, not results. Nothing here produced a number, which
 is why there is no run under `experiments/` for it — the recorded MTTR figures
 come from Phase 11 and from nowhere else.
 
+## Forking
+
+The Applications name a repository, and Argo reconciles from **that** one — not
+from wherever your working copy came from. On a fork those differ, so
+`bootstrap.sh` compares the `repoURL` in these manifests against
+`git remote get-url origin` and refuses to run when they disagree. Point
+`repoURL` and the AppProject's `sourceRepos` at your own fork first; otherwise
+a cluster with prune and self-heal on would be reconciling somebody else's
+`main` and ignoring your commits.
+
 ## Trying a branch
 
 ```bash
@@ -84,13 +94,27 @@ those say `targetRevision: main` — as they must, being the production
 manifests — so the children would track `main` while the root tracked the
 branch. `main` is the only revision the full app-of-apps runs at.
 
+## Uninstalling
+
+`--uninstall` removes this project's Applications by name and the `fleet`
+AppProject. It removes Argo CD itself only when this script was what installed
+it, which it knows from a label set on the namespace at install time. An Argo
+CD that was already on the cluster — with, presumably, other Applications in
+it — is left alone along with its CRDs.
+
 ## Once this is running, deploy.sh no longer has the last word
 
 `deploy.sh` still builds images, side-loads them into kind, and manages the
-device pods. But for anything under `base/`, `kafka/`, `recovery/` or
-`monitoring/`, a local edit applied by hand is drift: Argo puts the cluster
-back to what the repository says, within seconds. Commit the change, or
-`--uninstall` first.
+device pods. But under `base/`, `kafka/`, `recovery/` and `monitoring/`, Argo
+now owns **the fields those manifests declare**: change one by hand and it is
+put back on the next reconcile. Commit the change, or `--uninstall` first.
+
+Fields the manifests do *not* declare are a different matter, and the
+distinction is worth knowing. Argo's three-way merge leaves them to whichever
+manager set them, so a `kubectl rollout restart` annotation survives — which is
+why `deploy.sh`'s restarts still work — and so would a stray `kubectl set env`
+or an injected sidecar. Self-heal is not an undo button for everything done by
+hand; it is an undo button for the things the repository has an opinion about.
 
 Two things stay imperative on purpose:
 

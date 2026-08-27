@@ -178,8 +178,8 @@ asserts behaviour rather than latency.
 
 **The platform reconciles itself from git — and stops at the fleet.** Argo CD
 manages the broker, gateway, Kafka, operator and monitoring: change a manifest
-in this repository and the cluster follows; change the cluster by hand and Argo
-puts it back. The device pods are outside that boundary on purpose. A device
+in this repository and the cluster follows; change one of the fields those
+manifests declare by hand and Argo puts it back. The device pods are outside that boundary on purpose. A device
 that fails is *supposed* to be missing from the cluster while still declared in
 git, and a controller with self-heal would restore it in about a second — from
 the wrong component, making the recorded MTTR a measurement of Argo's sync loop

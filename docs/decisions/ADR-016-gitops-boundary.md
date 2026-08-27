@@ -20,11 +20,13 @@ Argo CD rather than Flux, for one reason that matters at this size: the
 "what is allowed" two separate, readable files. The second one is doing real
 work below.
 
-The **core** install — no API server, no web UI, no Dex. A controller, a repo
-server and a redis. This cluster has 3.8 GB and runs on the machine the
-experiments measure in; the components that exist to serve a console are not
-worth their memory. Measured before and after: the node went from 2.51 GB to
-2.72 GB, so Argo cost about 210 MB.
+The **core** install — no API server, no web UI, no Dex. Four workloads
+instead of the full install's eight. This cluster runs on the machine the
+experiments measure in, so the components that exist to serve a console are
+not worth their memory. The cost was checked on the host before and after
+installing and it was small, but no figure is quoted: no recorded run produced
+one, and a number without provenance is what the reproducibility contract
+exists to keep out of these documents.
 
 Pinned to `v3.4.8` like every other version in this project. That is the
 latest patch of the previous minor rather than the newest tag, which was
@@ -90,8 +92,8 @@ chaos framework (ADR-013), the CI-hosted benchmark (ADR-014), and now Helm.
 On the kind cluster running the full stack plus the recovery operator:
 
 - **Reconciliation works.** A hand-made `kubectl scale deployment/gateway
-  --replicas=3` was detected within ten seconds and reverted to the declared
-  single replica about nineteen seconds after it was introduced.
+  --replicas=3` was detected and reverted to the declared single replica
+  automatically, well inside a minute, with nobody touching Argo.
 - **The fleet is left alone.** Git declares `edge-device-001/002/003`; the
   live fleet contained an operator-built `device-002-r-0194b194ba`. Every
   Application reported `Synced` throughout.
@@ -105,10 +107,17 @@ Phase 11 recorded run and from nowhere else.
 
 ## Consequences
 
-- **`deploy.sh` no longer has the last word.** For anything under the four
-  managed directories, a locally edited manifest applied by hand is drift and
-  is reverted within seconds. Commit it, or `bootstrap.sh --uninstall` first.
-  Images and the device pods are unaffected — `deploy.sh` still owns both.
+- **`deploy.sh` no longer has the last word — for the fields the manifests
+  declare.** Change one of those in the cluster by hand and Argo puts it back
+  on its next reconcile: a `kubectl scale` of the gateway was reverted while
+  being watched. Add a field the manifests do not declare and Argo leaves it
+  alone, because its three-way merge only owns what it states — a
+  `kubectl rollout restart` annotation survived a minute of polling with the
+  Application reporting `Synced`. So `deploy.sh`'s four `rollout restart`
+  calls still work under Argo, and so, unfortunately, would a stray
+  `kubectl set env` or an injected sidecar. Commit what you want kept, or
+  `bootstrap.sh --uninstall` first. Images and the device pods are unaffected
+  either way — `deploy.sh` still owns both.
 - **Argo manages manifests, not images.** `kind` has no registry, so images
   still arrive by side-load. Phase 12's tag-gated GHCR publish is what a
   cluster that is not this laptop would pull from, and wiring that up is the
