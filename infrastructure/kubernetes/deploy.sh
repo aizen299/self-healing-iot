@@ -153,6 +153,13 @@ say "replacing device pods"
 
 say "applying manifests"
 "${KUBECTL[@]}" apply -f "$HERE/base/"
+
+# fleet/ is applied here and is deliberately not under GitOps management
+# (ADR-016): a failed device is *supposed* to be missing from the cluster
+# until the operator replaces it, so a reconciler that restored it from git
+# would be measuring its own sync loop instead of the recovery loop — the
+# same reason these are bare Pods rather than a Deployment (ADR-010).
+"${KUBECTL[@]}" apply -f "$HERE/fleet/"
 if [ "$WITH_KAFKA" = true ]; then
   # No `set env` here any more. The fleet-kafka ConfigMap in that directory
   # carries both GATEWAY_KAFKA_ENABLED and the bootstrap address, and the
@@ -269,7 +276,7 @@ if [ "$labelled" != "$reported" ]; then
   echo "device-id labels do not match the ids the gateway is receiving." >&2
   echo "  labelled : $(echo "$labelled" | tr '\n' ' ')" >&2
   echo "  reporting: $(echo "$reported" | tr '\n' ' ')" >&2
-  echo "Check FLEET_DEVICE_INDEX_OFFSET against the device-id label in base/40-devices.yaml." >&2
+  echo "Check FLEET_DEVICE_INDEX_OFFSET against the device-id label in fleet/40-devices.yaml." >&2
   exit 1
 fi
 echo "  ok: $(echo "$labelled" | tr '\n' ' ')"

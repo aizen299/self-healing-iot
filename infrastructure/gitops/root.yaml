@@ -1,0 +1,29 @@
+# The one thing bootstrap applies. Everything else arrives because this did.
+#
+# App-of-apps: this Application's source is the directory of Applications, so
+# adding a component to the platform is a file in `apps/` and a commit, not a
+# second bootstrap step. It is also what makes the set of managed components
+# reviewable — the diff that adds an Application is the diff that grants it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fleet-root
+  namespace: argocd
+  finalizers:
+    # Deleting the root deletes its children. Without this the Applications
+    # survive their parent and keep reconciling, which is a confusing way to
+    # discover that "kubectl delete app fleet-root" did not uninstall anything.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: fleet
+  source:
+    repoURL: https://github.com/aizen299/self-healing-iot.git
+    targetRevision: main
+    path: infrastructure/gitops/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

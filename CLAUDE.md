@@ -34,12 +34,12 @@ that way until a run produces it.
 
 ## Current status
 
-**Phases 1–12 complete — a self-healing fleet you can watch, measure, and
-no longer break by accident.** A device that dies is detected, replaced, and
-back online with nobody touching it; Prometheus and Grafana show it happening;
-Phase 11 recorded the first real results — 20 samples of MTTR and a recovery
-success rate, under the reproducibility contract; and Phase 12 puts a gate in
-front of every change. See `docs/experiments/pillar-b-recovery.md`. Pillars A
+**All thirteen phases complete.** A device that dies is detected, replaced,
+and back online with nobody touching it; Prometheus and Grafana show it
+happening; Phase 11 recorded the first real results — 20 samples of MTTR and a
+recovery success rate, under the reproducibility contract; Phase 12 puts a gate
+in front of every change; and Phase 13 reconciles the platform from git while
+keeping its hands off the fleet. See `docs/experiments/pillar-b-recovery.md`. Pillars A
 and C are still unmeasured and the writeup index says so. Phase 7 was taken
 before Phase 6
 (ADR-008): Kafka and a real TSDB both need a server, and containers supply
@@ -99,6 +99,29 @@ deploy to; `deploy.sh` side-loads into kind with no registry in the path.
 
 The smoke test (`infrastructure/docker/smoke-test.sh`) cannot run while the
 kind cluster is up: both publish the gateway on host 18080.
+
+**GitOps stops at the fleet** (ADR-016). `infrastructure/gitops/bootstrap.sh`
+installs Argo CD core and hands it `base/`, `kafka/`, `recovery/` and
+`monitoring/` — one Application per `deploy.sh` flag, under an app-of-apps.
+The device manifests live in `fleet/` and are in **no** Application's path,
+because a failed device is supposed to be missing from the cluster while still
+declared in git, and a controller with self-heal would restore it in about a
+second — making the recorded MTTR a measurement of Argo's sync loop instead of
+the recovery loop (the same argument as ADR-010's rejection of a Deployment).
+The AppProject also sets `namespaceResourceBlacklist` on `Pod`, so pointing an
+Application at `fleet/` fails rather than quietly working. **Never put the
+device manifests under GitOps management.**
+
+Once bootstrapped, Argo owns the fields the managed manifests **declare**: a
+hand edit to one is reverted on the next reconcile, so commit it or
+`bootstrap.sh --uninstall` first. Fields the manifests do not declare are left
+to whoever set them — which is why `deploy.sh`'s `rollout restart` still works,
+and why self-heal will not undo a `kubectl set env`.
+Images and device pods stay with `deploy.sh`: Argo applies manifests and
+neither builds nor loads images, and `kind` has no registry.
+
+`infrastructure/helm/` stays empty. Argo applies plain directories, and a chart
+would template for one environment with no second one to differ from it.
 
 The full stack runs in containers, published on **18080** because 8080 is
 already taken on this machine (Jenkins):
@@ -323,7 +346,8 @@ duplicate the wire format.
 | `common/` | Shared DTOs, wire-format schema, MQTT/Kafka topic constants, small utilities — deliberately thin, not a dumping ground |
 | `infrastructure/docker/` | Per-module Dockerfiles + root `docker-compose.yml` for the full local stack |
 | `infrastructure/kubernetes/` | Manifests for kind/Minikube: Deployments, ConfigMaps, probes, RBAC. Workload labels (`app=edge-device`, `device-id=...`, `fleet-id=...`) are how the recovery operator identifies/replaces workloads |
-| `infrastructure/helm/` | Optional, only if it simplifies later GitOps/ArgoCD phase |
+| `infrastructure/gitops/` | Argo CD: the AppProject that draws the fleet boundary, the app-of-apps, `bootstrap.sh` |
+| `infrastructure/helm/` | Reserved for a chart, deliberately still empty (ADR-016) |
 | `infrastructure/monitoring/` | Prometheus scrape config and Grafana provisioning. `grafana/dashboards/fleet.json` is the dashboard and the only copy of it — `deploy.sh` builds the ConfigMap from that file |
 | `experiments/` | `configs/`, `scripts/`, `results/{raw,processed}/` — see reproducibility contract below |
 | `docs/decisions/` | ADRs (numbered `ADR-NNN-*.md`) for major architecture decisions |

@@ -143,7 +143,7 @@ short while the operator reports it had nothing to do.
 ### The replacement is cloned, not templated
 
 A pod spec written into the operator — or into a ConfigMap beside it — would
-be a second copy of `base/40-devices.yaml`, and the two would drift: the
+be a second copy of `fleet/40-devices.yaml`, and the two would drift: the
 fleet would get a heap flag or a resource limit that replacements silently
 did not. The operator clones the failed pod's own manifest if it still
 exists (a crashed pod with `restartPolicy: Never` does), and any living

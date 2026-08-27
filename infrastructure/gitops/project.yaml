@@ -1,0 +1,49 @@
+# The blast radius, declared once.
+#
+# An AppProject is what an Application is allowed to do. Everything below is a
+# restriction, and the important one is the last.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: fleet
+  namespace: argocd
+spec:
+  description: >-
+    The self-healing fleet platform. Manages the services the fleet runs on;
+    never the devices themselves.
+
+  # One repository. A GitOps controller that will reconcile from anywhere is a
+  # controller that will reconcile from anywhere.
+  sourceRepos:
+    - https://github.com/aizen299/self-healing-iot.git
+
+  # One namespace on the local cluster. `fleet` for the workloads, `argocd`
+  # for the app-of-apps to write its children into.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: fleet
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+
+  # The operator needs RBAC, which is cluster-scoped; nothing else here is.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  # This is the boundary, and it is enforced rather than agreed to.
+  #
+  # A device is a bare Pod on purpose (ADR-010): when one dies it must stay
+  # dead until the recovery operator replaces it, because that interval is the
+  # MTTR this project measures. A GitOps controller with self-heal on would
+  # see a Pod missing from the cluster that is present in git and recreate it —
+  # in about a second, from the wrong component, and the recorded MTTR would
+  # then be a measurement of Argo's sync loop.
+  #
+  # `fleet/40-devices.yaml` is therefore in no Application's path. That alone
+  # would be a convention, and conventions are one careless edit from being
+  # gone, so the project refuses to manage a Pod at all. Nothing here needs
+  # one: every workload in base/, kafka/, recovery/ and monitoring/ is a
+  # Deployment or a StatefulSet, which own their Pods themselves.
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: Pod
