@@ -35,9 +35,11 @@ spec:
       prune: true
       selfHeal: true
     # No CreateNamespace: base/00-namespace.yaml declares the namespace, and a
-    # sync option that creates it too would give one resource two owners. On a
-    # cluster where it does not exist yet, whichever app runs before the
-    # platform app fails once and this retry picks it up in seconds.
+    # sync option that creates it too would give one resource two owners.
+    # Ordering is the sync wave's job, not this retry's — the wave is what
+    # guarantees the namespace exists before anything is created in it. The
+    # retry is here for ordinary transient failures: a repo-server restart, a
+    # webhook timeout, an API server that was briefly busy.
     retry:
       limit: 5
       backoff:

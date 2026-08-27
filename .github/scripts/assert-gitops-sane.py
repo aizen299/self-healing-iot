@@ -26,6 +26,7 @@ Run from anywhere:
 
 `--self-test` checks this script against fixtures instead of the repository.
 """
+import os
 import re
 import sys
 import tempfile
@@ -33,6 +34,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GITOPS = ROOT / "infrastructure" / "gitops"
+
+# The branch the committed manifests are expected to track. Named rather than
+# assumed, so a repository whose default branch is not `main` gets a
+# configuration knob instead of every Application reported as a mistake.
+DEFAULT_BRANCH = os.environ.get("GITOPS_DEFAULT_BRANCH", "main")
 
 
 def load(path):
@@ -45,10 +51,21 @@ def load(path):
     """
     text = path.read_text()
     fields = {}
-    for key in ("kind", "name", "project", "repoURL", "targetRevision", "path"):
+    for key in ("kind", "project", "repoURL", "targetRevision", "path"):
         match = re.search(rf"^\s*{key}:\s*(\S+)\s*$", text, re.MULTILINE)
         if match:
             fields[key] = match.group(1).strip('"\'')
+
+    # `name` is taken from the metadata block rather than from the first
+    # `name:` anywhere in the file. Every other key appears once in these
+    # manifests; `name` is the one a selector, a container, or a second source
+    # would also introduce, and reading the wrong one silently is worse than
+    # not reading it.
+    metadata = re.search(r"^metadata:\n((?:[ \t]+.*\n|\n)*)", text, re.MULTILINE)
+    if metadata:
+        name = re.search(r"^\s+name:\s*(\S+)\s*$", metadata.group(1), re.MULTILINE)
+        if name:
+            fields["name"] = name.group(1).strip('"\'')
     wave = re.search(r'sync-wave:\s*"(-?\d+)"', text)
     if wave:
         fields["wave"] = int(wave.group(1))
@@ -61,7 +78,11 @@ def bare_pods_under(path, root):
     if not directory.is_dir():
         return []
     found = []
-    for manifest in sorted(directory.rglob("*.yaml")):
+    # Both extensions. kubectl accepts either, kubeconform is handed
+    # directories rather than a glob, so a device manifest saved as .yml would
+    # otherwise walk straight through the one check meant to stop it.
+    manifests = sorted(list(directory.rglob("*.yaml")) + list(directory.rglob("*.yml")))
+    for manifest in manifests:
         if re.search(r"^kind:\s*Pod\s*$", manifest.read_text(), re.MULTILINE):
             found.append(manifest.relative_to(root))
     return found
@@ -115,11 +136,14 @@ def check(gitops=GITOPS, root=ROOT):
                 f"beside it is {project_name!r} — an Application outside that "
                 f"project escapes its Pod blacklist (ADR-016)")
 
-        if fields.get("targetRevision") != "main":
+        if fields.get("targetRevision") != DEFAULT_BRANCH:
             problems.append(
-                f"{rel}: targetRevision is {fields.get('targetRevision')!r}. The "
-                f"committed manifests track main; use bootstrap.sh --revision to "
-                f"try a branch, so a deleted branch cannot strand the cluster")
+                f"{rel}: targetRevision is {fields.get('targetRevision')!r}, not "
+                f"{DEFAULT_BRANCH!r}. The committed manifests track the default "
+                f"branch; use bootstrap.sh --revision to try a branch, so a "
+                f"deleted one cannot strand the cluster. If this repository's "
+                f"default branch is not {DEFAULT_BRANCH!r}, set "
+                f"GITOPS_DEFAULT_BRANCH")
 
         declared = fields.get("path")
         if declared and not (root / declared).is_dir():
@@ -174,13 +198,13 @@ spec:
 
 
 def fixture(tmp, *, project="fleet", repo="https://example.com/repo.git",
-            revision="main", path="managed", wave=0, pod=False,
-            root_path="apps-dir"):
+            revision=DEFAULT_BRANCH, path="managed", wave=0, pod=False,
+            root_path="apps-dir", extension="yaml"):
     """A gitops tree and the repository root it describes."""
     root = tmp
     (root / "managed").mkdir(parents=True, exist_ok=True)
     (root / "apps-dir").mkdir(parents=True, exist_ok=True)
-    (root / "managed" / "10-thing.yaml").write_text(
+    (root / "managed" / f"10-thing.{extension}").write_text(
         "kind: Pod\n" if pod else "kind: Deployment\n")
 
     gitops = root / "infrastructure" / "gitops" / "apps"
@@ -211,9 +235,11 @@ def self_test():
     case("a path that does not exist fails", False, "not a directory",
          path="nowhere")
     case("a bare Pod in a managed path fails", False, "bare Pod", pod=True)
+    case("a bare Pod in a .yml file fails too", False, "bare Pod", pod=True,
+         extension="yml")
     case("a foreign project fails", False, "escapes its Pod blacklist",
          project="default")
-    case("a branch targetRevision fails", False, "track main",
+    case("a branch targetRevision fails", False, "track the default branch",
          revision="some-branch")
     case("a disagreeing repoURL fails", False, "disagree about the repository",
          repo="https://example.com/other.git")

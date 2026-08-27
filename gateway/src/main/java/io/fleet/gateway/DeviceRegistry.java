@@ -110,10 +110,9 @@ public final class DeviceRegistry {
                 || after.health() != DeviceHealth.OFFLINE) {
             return Optional.empty();
         }
-        long offlineSince = after.offlineSinceMillis() > 0L
-                ? after.offlineSinceMillis() : offlineSinceBefore;
         return Optional.of(new HealthTransition(after.deviceId(),
-                DeviceHealth.OFFLINE, DeviceHealth.OFFLINE, atMillis, 0, offlineSince));
+                DeviceHealth.OFFLINE, DeviceHealth.OFFLINE, atMillis, 0,
+                offlineSinceOf(after, offlineSinceBefore)));
     }
 
     /**
@@ -228,6 +227,20 @@ public final class DeviceRegistry {
      * capturing it first the elapsed time would be discarded at the exact
      * moment it becomes meaningful.
      */
+    /**
+     * When the device went offline, for the transition being announced.
+     *
+     * <p>One definition, because two would be one too many: this is the value
+     * {@code recoveryDurationMillis} subtracts from, so a copy that drifted
+     * would give the same recovery two different durations depending on which
+     * path announced it. A record that has already been cleared reports 0, and
+     * the value carried into this call is then the one still worth reporting.
+     */
+    private static long offlineSinceOf(DeviceRecord after, long offlineSinceBefore) {
+        return after.offlineSinceMillis() > 0L
+                ? after.offlineSinceMillis() : offlineSinceBefore;
+    }
+
     private static Optional<HealthTransition> transitionOf(
             DeviceHealth before, long offlineSinceBefore, DeviceRecord after,
             long atMillis, int missed) {
@@ -235,9 +248,8 @@ public final class DeviceRegistry {
         if (before == after.health()) {
             return Optional.empty();
         }
-        long offlineSince = after.offlineSinceMillis() > 0L
-                ? after.offlineSinceMillis() : offlineSinceBefore;
         return Optional.of(new HealthTransition(
-                after.deviceId(), before, after.health(), atMillis, missed, offlineSince));
+                after.deviceId(), before, after.health(), atMillis, missed,
+                offlineSinceOf(after, offlineSinceBefore)));
     }
 }

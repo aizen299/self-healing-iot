@@ -91,7 +91,7 @@ public final class MqttIngestor implements MqttCallback, EventPublisher, AutoClo
         this.registry = registry;
         this.metrics = metrics;
         this.clock = clock;
-        this.flapDetector = new ConnectionFlapDetector(clock);
+        this.flapDetector = new ConnectionFlapDetector();
         this.policy = policy;
         this.store = store;
         try {
