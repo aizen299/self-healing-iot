@@ -6,8 +6,9 @@
 # was the one part verified only by hand. The Dockerfile hardcodes a list of
 # module poms and source directories, so adding a module — the stream processor
 # in Phase 6, the recovery operator in Phase 9 — can build fine under Maven and
-# fail inside Docker on a clean cache. This is what catches that, and what
-# Phase 12's CI should run.
+# fail inside Docker on a clean cache. This is what catches that, and CI runs
+# it on every pull request — .github/workflows/ci.yml, the "images and smoke
+# test" job.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

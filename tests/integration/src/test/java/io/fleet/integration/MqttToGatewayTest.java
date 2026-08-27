@@ -24,7 +24,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -73,12 +73,16 @@ class MqttToGatewayTest {
                  FleetHarness harness = new FleetHarness(deviceConfig, sinks)) {
 
                 harness.start();
-                awaitUntil(() -> metrics.acceptedCount() >= 3L);
+                Await.until("telemetry from all three devices",
+                        () -> metrics.acceptedCount() >= 3L,
+                        () -> metrics.acceptedCount() + " readings accepted");
 
                 // Asserted while the fleet is still up: presence rides the
                 // device's own connection, so once it closes the correct answer
                 // becomes OFFLINE.
-                awaitUntil(() -> presenceOf(registry, prefix + "-001") == Presence.ONLINE);
+                Await.until(prefix + "-001 to report ONLINE",
+                        () -> presenceOf(registry, prefix + "-001") == Presence.ONLINE,
+                        () -> "presence is " + presenceOf(registry, prefix + "-001"));
 
                 Optional<DeviceRecord> first = registry.find(prefix + "-001");
                 assertTrue(first.isPresent(), "gateway should know device " + prefix + "-001");
@@ -95,24 +99,30 @@ class MqttToGatewayTest {
             // retained SHUTDOWN — not the OFFLINE the broker would publish as a
             // will — and the gateway must not read that as a failure.
             //
-            // The wait is on the whole fleet, not on -001. Presence rides each
+            // Waited on the whole fleet, not on -001. Presence rides each
             // device's own connection (ADR-004), so three devices publish three
             // SHUTDOWNs independently and one arriving says nothing about the
-            // other two — while the count below covers all three. That gap is
-            // invisible on an idle laptop and a flaky failure on a loaded CI
-            // runner, which is where it first showed up.
-            awaitUntil(() -> registry.onlineCount() == 0L);
+            // other two. That gap is invisible on an idle laptop and a flaky
+            // failure on a loaded CI runner, which is where it showed up.
+            Await.until("every device to stop reporting ONLINE",
+                    () -> registry.onlineCount() == 0L,
+                    () -> "still online: " + stillOnline(registry));
 
-            // Asserted rather than awaited: once nothing is online, a device
-            // sitting at OFFLINE means the broker published its will and the
-            // gateway read a deliberate stop as a failure. Waiting for SHUTDOWN
-            // would report that as a timeout with nothing to say about why.
-            assertEquals(Presence.SHUTDOWN, presenceOf(registry, prefix + "-001"),
-                    "a clean stop is SHUTDOWN, not the will the broker sends for a death");
-            assertEquals(0L, registry.onlineCount(),
-                    "no device should still be reported online after a clean shutdown");
-            assertEquals(0L, metrics.failuresDetectedCount(),
-                    "stopping a fleet on purpose is not a fleet-wide failure");
+            // Every device, not just -001. A device left at OFFLINE means the
+            // broker published its will and the gateway read a deliberate stop
+            // as a death — and checking one of three would let that pass on the
+            // other two, which is the same one-device gap moved somewhere else.
+            for (int i = 1; i <= 3; i++) {
+                String id = prefix + "-00" + i;
+                assertEquals(Presence.SHUTDOWN, presenceOf(registry, id), id
+                        + ": a clean stop is SHUTDOWN, not the will the broker sends for a death");
+            }
+
+            // The claim that a deliberate stop is not counted as a failure
+            // belongs where a HealthMonitor exists to count one: this test
+            // builds only an ingestor, so metrics.failuresDetectedCount() is
+            // structurally zero here and asserting it proved nothing. See
+            // HeartbeatFailureDetectionTest.cleanShutdownIsNotAFailure.
         }
     }
 
@@ -138,12 +148,16 @@ class MqttToGatewayTest {
 
             byte[] garbage = "{\"deviceId\":".getBytes(StandardCharsets.UTF_8);
             sink.publish(Topics.telemetry(deviceId), garbage, 0, garbage.length);
-            awaitUntil(() -> metrics.malformedCount() >= 1L);
+            Await.until("the malformed payload to be rejected",
+                    () -> metrics.malformedCount() >= 1L,
+                    () -> metrics.malformedCount() + " rejected so far");
 
             // The gateway must keep serving this device afterwards.
             byte[] good = wireFormatFor(deviceId).getBytes(StandardCharsets.UTF_8);
             sink.publish(Topics.telemetry(deviceId), good, 0, good.length);
-            awaitUntil(() -> metrics.acceptedCount() >= 1L);
+            Await.until("a good reading after the malformed one",
+                    () -> metrics.acceptedCount() >= 1L,
+                    () -> metrics.acceptedCount() + " readings accepted");
 
             DeviceRecord record = registry.find(deviceId).orElseThrow();
             assertEquals(1L, record.telemetryRejected());
@@ -175,19 +189,11 @@ class MqttToGatewayTest {
         }
     }
 
-    private static void awaitUntil(BooleanSupplier condition) {
-        long deadline = System.currentTimeMillis() + 15_000L;
-        while (System.currentTimeMillis() < deadline) {
-            if (condition.getAsBoolean()) {
-                return;
-            }
-            try {
-                Thread.sleep(20L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new AssertionError("interrupted while awaiting condition", e);
-            }
-        }
-        throw new AssertionError("condition not met within 15s");
+    /** Which devices are still ONLINE, for a timeout that has to explain itself. */
+    private static String stillOnline(DeviceRegistry registry) {
+        return registry.all().stream()
+                .filter(record -> record.presence() == Presence.ONLINE)
+                .map(DeviceRecord::deviceId)
+                .collect(Collectors.joining(", "));
     }
 }

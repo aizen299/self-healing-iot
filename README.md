@@ -82,8 +82,8 @@ and current implementation status.
 and no longer break by accident.** A device that dies is detected, replaced,
 and back online without anyone touching it; Prometheus and Grafana show it
 happening; Phase 11 recorded the first real results; and Phase 12 puts a gate
-in front of every change. Every module is implemented, tested, and runnable;
-260 tests pass.
+in front of every change. Every module is implemented, tested, and runnable,
+and the whole suite passes against a real broker.
 
 Phase 7 was taken **before** Phase 6: both Kafka and a real time-series
 database need a server, and the phase that supplies servers came after both
@@ -165,10 +165,10 @@ unmeasured and the writeups say so
 on each pull request, checks the shell scripts that make up the experiment
 apparatus, and builds the container images and smoke-tests the stack. The
 check that matters is not that the build passed but that the *suite ran
-complete*: 11 of the 260 tests skip themselves when no broker is listening —
-the whole MQTT wire path and heartbeat detection — and a skipped test reports
-success. CI fails on a skip, so a broker that never started can no longer
-produce a green run that covered nothing
+complete*: the MQTT suites skip themselves when no broker is listening — the
+whole MQTT wire path and heartbeat detection — and a skipped test reports
+success. CI fails on a skip, quoting the reason the test gave, so a broker
+that never started can no longer produce a green run that covered nothing
 ([ADR-014](docs/decisions/ADR-014-continuous-integration-shape.md)).
 
 CI produces no numbers. Shared runners of unstated hardware cannot satisfy the
@@ -295,8 +295,9 @@ configuration attached.
 ## Continuous integration
 
 Every pull request runs the build and the full test suite against a real
-Mosquitto broker, ShellCheck over the scripts, and an image build plus a smoke
-test of the containerised stack. The same gate runs locally:
+Mosquitto broker; ShellCheck and `actionlint` over the scripts and the
+workflow; `kubeconform` over the Kubernetes manifests; and an image build plus
+a smoke test of the containerised stack. The same gate runs locally:
 
 ```bash
 docker compose up -d --wait broker
@@ -307,10 +308,11 @@ mvn -B verify && python3 .github/scripts/assert-suite-complete.py
 ```
 
 The second command is the part that is easy to skip and shouldn't be. `mvn`
-exits 0 when tests are skipped, and 11 of the 260 tests skip themselves when
-no broker is reachable — so a green build alone does not mean the MQTT path
-was tested. The assertion fails unless every module reported and nothing was
-skipped, and it names the classes that were.
+exits 0 when tests are skipped, and the MQTT suites skip themselves when no
+broker is reachable — so a green build alone does not mean the MQTT path was
+tested. The assertion fails unless every module reported and nothing was
+skipped, and it quotes the reason each skipped test gave. It also rejects a
+report left behind by an earlier run, since surefire never deletes one.
 
 Images are published to GHCR only when a `v*` tag is pushed, with immutable
 version and commit tags and no `:latest`. Merging to main publishes nothing;

@@ -5,8 +5,9 @@ receives it -> kill device -> verify heartbeat-timeout detection ->
 verify failure event -> verify recovery controller reacts -> verify
 replacement telemetry resumes -> record recovery duration.
 
-**Status: still empty as a JUnit suite, and that is now a deliberate
-position rather than a gap waiting on Phase 9.**
+**Status: deliberately empty as a JUnit suite — see
+[ADR-015](../../docs/decisions/ADR-015-where-the-end-to-end-scenario-lives.md),
+which records the decision and what would reverse it.**
 
 The scenario itself exists and runs — twice over, at two different
 altitudes:
@@ -31,4 +32,5 @@ and the threshold question is answered by the writeup.
 What would justify a suite here: a scenario that has to *fail* the build
 rather than be measured — for instance, asserting that a redelivered
 failure event never produces a second replacement (ADR-011's idempotence
-guarantee), which is a yes/no property and does not need a number.
+guarantee), which is a yes/no property and does not need a number. If this
+directory ever fills up, it should fill up with that and not with timings.

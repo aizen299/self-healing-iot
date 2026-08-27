@@ -35,19 +35,35 @@ from that, and it is the same reasoning that keeps the JVM pinned.
 
 ### The gate is "the suite ran complete", not "the build passed"
 
-`mvn verify` exits 0 when tests are skipped. Eleven of this project's 260
-tests skip themselves when no MQTT broker is reachable: the seven in
-`MqttTelemetrySinkTest`, and the four integration tests covering MQTT →
-gateway and heartbeat-timeout detection. That skip is correct behaviour
+`mvn verify` exits 0 when tests are skipped. Measured on the day this was
+written, eleven of the suite's 260 tests skipped themselves when no MQTT
+broker was reachable: the seven in `MqttTelemetrySinkTest`, and the four
+integration tests covering MQTT → gateway and heartbeat-timeout detection.
+Those counts are recorded here, dated, and nowhere else — a figure repeated
+across README and CLAUDE.md goes stale the next time a test is added, and a
+stale figure in four places is worse than one figure in one. That skip is correct behaviour
 locally — `mvn test` should stay green on a machine with no broker — and it
 is exactly wrong in CI, where a broker that failed to start would produce a
 green run covering none of Phase 2 and none of Phase 4's integration path.
 
 So CI starts a real broker, and then asserts that the suite ran complete:
-every module with tests reported, nothing skipped, nothing failed. The numbers
-above are measured, not estimated — the suite skips 11 with no broker and 0
-with one, which is what makes zero an honest threshold rather than an
-aspiration.
+every module with tests reported, no report belongs to a class that no longer
+exists, nothing skipped, nothing failed. The numbers above are measured, not
+estimated — the suite skipped 11 with no broker and 0 with one, which is what
+makes zero an honest threshold rather than an aspiration.
+
+Two details of that check earn their place. It reads the **reason** for each
+skip out of the report rather than inferring one: JUnit writes the assumption
+message into the `<skipped>` element, so the gate can quote the test instead
+of guessing that any skip means the broker is down — which would misdirect
+whoever reads it the first time a skip has some other cause. And it rejects a
+report whose test class has no source file, because surefire never deletes
+reports: without that, a build that skipped `clean` folds a renamed class's
+last run into this one's totals.
+
+The check has its own fixtures, run in CI as `--self-test`. It is the one
+component here whose failure mode is a green build, so a regression in it is
+invisible by construction unless something tests it.
 
 The broker is started with `docker compose up --wait broker` rather than as a
 workflow service container. The broker's configuration is a file in this
@@ -104,11 +120,18 @@ framework to inject a fault that `kubectl delete` already injects.
 
 What a registry does buy is a cluster that is not this laptop, and Phase 13's
 optional GitOps. So the images are published, on a `v*` tag only. Merging to
-main publishes nothing. Each image gets two immutable tags — the version and
-the commit sha — and **no `:latest`**: the Dockerfile pins its own bases by
-digest so a moving tag cannot change the JVM under a measurement, and
-publishing a moving tag of our own would hand that same problem to whoever
-pulls these.
+main publishes nothing. Each image gets two tags — the version and the commit
+sha — and **no `:latest`**: the Dockerfile pins its own bases by digest so a
+moving tag cannot change the JVM under a measurement, and publishing a moving
+tag of our own would hand that same problem to whoever pulls these.
+
+Only the sha tag is genuinely immutable, since it names the commit that built
+it; a force-moved git tag would republish over the version tag. The job prints
+each pushed digest for that reason — the digest is the thing to pin against —
+and it refuses to publish at all unless the tag matches the version in
+`pom.xml` and that version is not a `-SNAPSHOT`. Otherwise `git tag v2.0.0`
+would put a version number on an image that appears nowhere in the source
+which built it.
 
 ### The shell scripts are checked at the strictest severity
 
@@ -144,9 +167,11 @@ and the pipeline went green again.
 
 ## Consequences
 
-- **The pipeline is four jobs**: build-and-test (with a broker), shell
-  scripts, images-and-smoke-test, and a publish job that runs on tags only.
-  The first three run on every pull request.
+- **The pipeline is five jobs**: build-and-test (with a broker), scripts
+  (ShellCheck, actionlint, and the gate's own fixtures), manifests
+  (kubeconform plus a parse of the Grafana dashboard, which nothing else in
+  the pipeline reads), images-and-smoke-test, and a publish job that runs on
+  tags only. The first four run on every pull request.
 - **A new module must be added to the Dockerfile as well as to `pom.xml`.**
   The image job builds the recovery-operator target explicitly, because
   compose builds only three of the four runtime targets and the operator is

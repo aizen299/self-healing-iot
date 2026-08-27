@@ -2,9 +2,9 @@
 #
 # What this pipeline is for, in one line: it runs the tests against a real
 # broker and refuses to call a run green unless the whole suite actually ran.
-# Eleven of the 260 tests skip themselves when no broker is listening, and a
-# skipped test reports success — so the interesting failure here is not a red
-# build, it is a green one that measured nothing. See ADR-014.
+# The MQTT suites skip themselves when no broker is listening, and a skipped
+# test reports success — so the interesting failure here is not a red build,
+# it is a green one that measured nothing. See ADR-014.
 name: CI
 
 # Pull requests are the gate. A version tag is the only trigger that
@@ -110,10 +110,75 @@ jobs:
         # SC2006. A shell bug in the apparatus does not announce itself the
         # way a failing test does.
         run: |
-          git ls-files -z '*.sh' | xargs -0 -r docker run --rm \
-            -v "$PWD:/mnt" -w /mnt \
+          # Every tracked *.sh, plus any tracked file whose first line is a
+          # shell shebang. Matching on the extension alone would let a script
+          # without one skip the check that exists for scripts.
+          scripts=()
+          while IFS= read -r -d '' f; do
+            case "$f" in *.sh) scripts+=("$f"); continue ;; esac
+            [ -f "$f" ] || continue
+            IFS= read -r first < "$f" || true
+            case "$first" in '#!'*sh|'#!'*sh[[:space:]]*) scripts+=("$f") ;; esac
+          done < <(git ls-files -z)
+
+          [ ${#scripts[@]} -gt 0 ] || {
+            echo "found no shell scripts to check, which is itself wrong" >&2
+            exit 1
+          }
+          echo "checking ${#scripts[@]}: ${scripts[*]}"
+
+          docker run --rm -v "$PWD:/mnt" -w /mnt \
             koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183 \
-            shellcheck --severity=style --format=gcc
+            shellcheck --severity=style --format=gcc "${scripts[@]}"
+
+      - name: actionlint
+        # The workflow's own shell was the one shell in the repository nothing
+        # checked — including the publish job's loop, the only code here that
+        # handles a credential. actionlint runs shellcheck over every `run:`
+        # block and validates the expressions and action references besides.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color
+
+      - name: The gate's own tests
+        # assert-suite-complete.py decides whether a build counts, so a
+        # regression in it is invisible by construction: the symptom is a
+        # green run. Its fixtures live in the script and need no build.
+        run: python3 .github/scripts/assert-suite-complete.py --self-test
+
+  manifests:
+    name: kubernetes manifests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Validate against the Kubernetes schemas
+        # Nothing else in this pipeline reads these files: the images job
+        # builds containers and runs compose, so a manifest typo — a bad
+        # indent, a renamed ConfigMap key, a selector that no longer matches
+        # what the operator looks for — surfaced only when someone ran
+        # deploy.sh, which is also the moment an experiment was about to start.
+        #
+        # -ignore-missing-schemas is for kind-cluster.yaml: kind's Cluster is
+        # not a Kubernetes API type and has no schema to check it against.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            ghcr.io/yannh/kubeconform@sha256:6b90a5f23d846140ce0194fe050b1995e546eba938f3a6bf10c039dd5e24588f \
+            -strict -summary -ignore-missing-schemas \
+            infrastructure/kubernetes
+
+      - name: Parse the Grafana dashboard
+        # deploy.sh builds a ConfigMap out of this file, and it is the only
+        # copy of the dashboard. Malformed JSON here means monitoring comes up
+        # empty with the rest of the deploy reporting success.
+        run: |
+          python3 -m json.tool --sort-keys \
+            infrastructure/monitoring/grafana/dashboards/fleet.json > /dev/null
+          echo "dashboard JSON parses"
 
   images:
     name: images and smoke test
@@ -149,7 +214,7 @@ jobs:
     # pipeline that leaves the machine, so it should correspond to a commit
     # someone deliberately named rather than to whatever main is today.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-and-test, scripts, images]
+    needs: [build-and-test, scripts, manifests, images]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -167,6 +232,26 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
 
+      - name: Check the tag against the project version
+        # Without this, `git tag v2.0.0` publishes images labelled v2.0.0 from
+        # a tree whose pom says something else, and the version on the image
+        # is a number that appears nowhere in the source that built it.
+        run: |
+          pom_version=$(python3 -c 'import xml.etree.ElementTree as ET;ns={"m":"http://maven.apache.org/POM/4.0.0"};print(ET.parse("pom.xml").getroot().find("m:version",ns).text)')
+          echo "pom version: ${pom_version}, tag: ${GITHUB_REF_NAME}"
+
+          case "$pom_version" in
+            *-SNAPSHOT)
+              echo "::error::refusing to publish ${pom_version}: a snapshot is by definition not a release. Set a release version in pom.xml before tagging." >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "$GITHUB_REF_NAME" != "v${pom_version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match pom.xml version ${pom_version} — expected v${pom_version}" >&2
+            exit 1
+          fi
+
       - name: Build and push every runtime image
         run: |
           repo="${GITHUB_REPOSITORY,,}"
@@ -175,14 +260,22 @@ jobs:
           # Two tags, and no :latest. The Dockerfile pins its own base images
           # by digest because a moving tag silently changes the JVM under a
           # measurement; publishing a moving tag of our own would hand that
-          # same problem to whatever pulls these. The version tag names the
-          # release, the sha tag names the commit, and both are immutable.
+          # same problem to whatever pulls these.
+          #
+          # The sha tag is immutable: it names the commit that built it. The
+          # version tag is only as immutable as the git tag it came from — a
+          # force-moved tag would republish over it — which is why the digest
+          # is printed below. The digest is the thing to pin against.
           for target in gateway edge-device stream-processor recovery-operator; do
             image="ghcr.io/${repo}/${target}"
             docker build -f infrastructure/docker/Dockerfile --target "$target" \
               -t "${image}:${GITHUB_REF_NAME}" -t "${image}:${sha_tag}" .
             docker push "${image}:${GITHUB_REF_NAME}"
             docker push "${image}:${sha_tag}"
-            docker inspect --format "published {{index .RepoDigests 0}}" \
-              "${image}:${GITHUB_REF_NAME}"
+
+            # Reporting only. A missing RepoDigests must not fail a release
+            # whose images are already in the registry.
+            digest=$(docker inspect --format '{{index .RepoDigests 0}}' \
+              "${image}:${GITHUB_REF_NAME}" 2>/dev/null || true)
+            echo "published ${image}:${GITHUB_REF_NAME} ${digest:-(digest unavailable)}"
           done

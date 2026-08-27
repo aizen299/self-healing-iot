@@ -63,17 +63,20 @@ the experiments measure in, and a build starting mid-run would sit inside a
 measurement invisibly (ADR-014).
 
 The gate is not "the build passed" but **"the suite ran complete."** `mvn`
-exits 0 when tests are skipped, and 11 of the 260 tests skip themselves when
-no broker is listening — the whole MQTT wire path plus heartbeat detection.
-CI starts a real broker with `docker compose up -d --wait broker` and then
-runs the check, which fails on any skip or any module that did not report:
+exits 0 when tests are skipped, and the MQTT suites skip themselves when no
+broker is listening — the whole MQTT wire path plus heartbeat detection. CI
+starts a real broker with `docker compose up -d --wait broker` and then runs
+the check, which fails on any skip, any stale report, or any module that did
+not report, quoting the reason each test gave for skipping:
 
 ```bash
 mvn -B verify && python3 .github/scripts/assert-suite-complete.py
 ```
 
 There is **no allow-list** in that check, on purpose — a test that needs to
-skip in CI requires a visible edit here with a reviewer attached.
+skip in CI requires a visible edit here with a reviewer attached. The check
+has its own fixtures (`--self-test`, run in CI): it decides whether a build
+counts, so a regression in it would show up as a green run.
 
 **Never add a benchmark, timing assertion or performance-trend job to CI.**
 Shared runners of unstated hardware cannot satisfy the reproducibility
@@ -81,16 +84,18 @@ contract, and a CI-generated chart is exactly the artefact that gets mistaken
 for a result. The smoke test asserts behaviour (telemetry accepted, history
 complete), never latency.
 
-ShellCheck runs at `--severity=style` — the strictest — over
-`git ls-files '*.sh'`, because those scripts are the experiment apparatus and
-Phase 11 lost two runs to bugs in them. Actions are pinned by commit SHA, the
-runner to `ubuntu-24.04`, ShellCheck by image digest: same argument as the
-Dockerfile's base-image digests.
+ShellCheck runs at `--severity=style` — the strictest — over every tracked
+script (by extension or shebang), because those scripts are the experiment
+apparatus and Phase 11 lost two runs to bugs in them. `actionlint` covers the
+workflow's own shell, and `kubeconform` validates the Kubernetes manifests,
+which nothing else in the pipeline reads. Actions are pinned by commit SHA,
+the runner to `ubuntu-24.04`, and every tool image by digest: same argument as
+the Dockerfile's base-image digests.
 
-Images publish to GHCR on a `v*` tag only — never on a merge — with immutable
-version and sha tags and **no `:latest`**. There is no environment to
-continuously deploy to; `deploy.sh` side-loads into kind with no registry in
-the path.
+Images publish to GHCR on a `v*` tag only — never on a merge — with **no
+`:latest`**, and the job refuses a tag that does not match the `pom.xml`
+version or that names a `-SNAPSHOT`. There is no environment to continuously
+deploy to; `deploy.sh` side-loads into kind with no registry in the path.
 
 The smoke test (`infrastructure/docker/smoke-test.sh`) cannot run while the
 kind cluster is up: both publish the gateway on host 18080.
@@ -350,11 +355,18 @@ Charts are generated from collected data, never from assumptions.
   empty; see `tests/unit/README.md`.
 - **Integration** (`tests/integration`): MQTT→Gateway, Gateway→Kafka,
   Kafka→storage, failure event→recovery.
-- **E2E** (`tests/e2e`): the project's core reproducible demo — start
-  device → send telemetry → verify gateway receives it → kill device →
-  verify heartbeat-timeout detection → verify failure event → verify
-  recovery controller reacts → verify replacement telemetry resumes →
-  record recovery duration.
+- **E2E** — the project's core reproducible demo: start device → send
+  telemetry → verify gateway receives it → kill device → verify
+  heartbeat-timeout detection → verify failure event → verify recovery
+  controller reacts → verify replacement telemetry resumes → record recovery
+  duration. It is **not** a JUnit suite and `tests/e2e` is deliberately empty
+  (ADR-015). The first half runs as `infrastructure/docker/smoke-test.sh` on
+  every pull request; the whole loop runs as
+  `experiments/scripts/run-recovery-experiment.sh` against a real cluster,
+  which records the duration rather than asserting a threshold no recorded
+  run justifies. Both are shell, so both are under ShellCheck. A yes/no
+  property — idempotent recovery, say — would justify a suite in
+  `tests/e2e`; a timing would not.
 
 ## Things to never do on this project
 
