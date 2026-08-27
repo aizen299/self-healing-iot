@@ -34,7 +34,7 @@ jobs:
       # The tests already default to this. Stating it makes the broker this
       # workflow starts and the broker the tests look for one decision
       # instead of two that have to agree.
-      MQTT_BROKER_URL: tcp://127.0.0.1:18830
+      MQTT_BROKER_URL: tcp://127.0.0.1:1883
     steps:
       # Actions are pinned to a commit SHA, not a tag, for the reason the
       # Dockerfile pins its base images by digest: a tag moves, and a gate
