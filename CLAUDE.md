@@ -28,7 +28,7 @@ engineering discipline on a modern JVM." The two evaluated pillars are:
 No numeric result may ever be reported (docs, README, presentation, code
 comments) unless it was produced by an actual recorded experiment run in
 `experiments/`. Never fabricate benchmark results. As of Phase 11 exactly one
-run qualifies (`b1-pod-loss-20260825T163042Z`); everything else in the repo
+run qualifies (`b1-pod-loss-20260827T144232Z`); everything else in the repo
 that looks like a figure is still labelled a demonstration, and must stay
 that way until a run produces it.
 

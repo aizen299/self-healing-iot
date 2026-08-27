@@ -1,7 +1,7 @@
 # Pillar B — automated failure detection and recovery
 
 **First recorded results.** Everything below came from
-`experiments/results/raw/b1-pod-loss-20260825T163042Z/` and was derived by
+`experiments/results/raw/b1-pod-loss-20260827T144232Z/` and was derived by
 `experiments/scripts/summarise.py`. Re-run the summariser on that directory
 and it reproduces these figures exactly; nothing here is an estimate.
 
@@ -22,7 +22,7 @@ to a failure event on `device.failures`.
 | Detection thresholds | suspect at 2, offline at 4 missed heartbeats |
 | Recovery confirmation | 2 heartbeats |
 | Failure mode | `pod-loss` (`kubectl delete --grace-period=0 --force`) |
-| Iterations | 20 |
+| Iterations | 20 (run duration 215 s) |
 
 ## Results
 
@@ -34,20 +34,20 @@ to a failure event on `device.failures`.
 
 | n | min | median | p90 | max | mean |
 |---|---|---|---|---|---|
-| 20 | 1045 ms | 1399 ms | 1761 ms | 2225 ms | 1434 ms |
+| 20 | 1089 ms | 1332.5 ms | 1602 ms | 1981 ms | 1373.5 ms |
 
 **Operator half — detection to the API server accepting the replacement pod.**
 A component of the number above, never to be added to it:
 
 | n | min | median | p90 | max | mean |
 |---|---|---|---|---|---|
-| 20 | 56 ms | 89 ms | 122 ms | 269 ms | 97 ms |
+| 20 | 48 ms | 80.5 ms | 115 ms | 263 ms | 87.9 ms |
 
 ## What the numbers say
 
 **The operator is not the bottleneck.** Deciding what to do and getting the
-API server to accept a replacement took a mean of 97 ms — **6.7% of MTTR**,
-between 4.0% and 23.1% on any individual sample. The remaining ~93% is the
+API server to accept a replacement took a mean of 88 ms — **6.4% of MTTR**,
+between 3.7% and 13.6% on any individual sample. The remaining ~94% is the
 replacement pod becoming a device: container start, JVM boot, MQTT connect,
 and then heartbeats.
 
@@ -59,18 +59,19 @@ how patient the gateway is before it believes a device is back.
 **The confirmation policy sets a floor.** The gateway requires 2 heartbeats at
 a 1000 ms tick before it will call a device recovered, so roughly a second of
 every measurement is a deliberate configuration choice rather than a system
-limit. The fastest recovery observed was 1045 ms, which is about that floor.
+limit. The fastest recovery observed was 1089 ms, which is about that floor.
 **MTTR here is not the smallest number this system could produce** — it is the
 number this configuration produces, and a run with a shorter tick or a
 single-heartbeat confirmation would report a smaller one without anything
 having got faster.
 
 **The external cross-check agrees.** Wall-clock time from `kubectl delete`
-returning to the gateway's API reporting `ONLINE`, polled at 4 Hz from outside
-the cluster, exceeded MTTR on **20 of 20** samples by 492–869 ms (median
-589 ms) — the poll interval, the API round trip, and the detection that
-happens before the gateway's own clock starts. Two independent views, no
-disagreement.
+returning to the gateway's API reporting `ONLINE`, polled on a 250 ms sleep
+from outside the cluster (slightly under 4 Hz once each poll's own HTTP round
+trip is counted), exceeded MTTR on **20 of 20** samples by 461–834 ms (median
+622 ms) — the poll interval, the API round trip, and the detection that
+happens before the gateway's own clock starts. Zero polls failed, and the
+summary's four independent counts of the run all agree.
 
 ## What this run does not show
 
@@ -92,6 +93,14 @@ MTTR behaves as the fleet grows.
 **One machine, one run.** No claim is made about Kubernetes recovery in
 general, or about a different device count, tick interval, or confirmation
 policy.
+
+**The JVM under measurement is the containers', not the host's.** Every
+component runs on `eclipse-temurin:21` (OpenJDK 21.0.12) and the run records
+that. The `java` on this machine's PATH happens to be a GraalVM, which ADR-002
+bans outright because its escape analysis would erase the allocation
+differences Pillar A measures — it is recorded separately in `metadata.json`
+under `hostJavaOnPath` precisely so it cannot be mistaken for the runtime that
+produced these numbers.
 
 ## Reproducing it
 

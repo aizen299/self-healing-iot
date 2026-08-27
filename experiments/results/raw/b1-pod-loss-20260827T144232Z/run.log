@@ -1,0 +1,52 @@
+
+[1m==> preflight[0m
+  device-001 -> edge-device-001 (Running)
+  device-002 -> edge-device-002 (Running)
+  device-003 -> edge-device-003 (Running)
+  gateway API reachable at http://127.0.0.1:18081
+
+[1m==> recording metadata[0m
+  captured startup headers and ConfigMaps
+  wrote /Users/aizen/Desktop/project-java/experiments/results/raw/b1-pod-loss-20260827T144232Z/metadata.json
+
+[1m==> attaching to device.recovery[0m
+  device.recovery starts at offset 0
+
+[1m==> injecting 20 pod-loss failures[0m
+  [1/20] killed edge-device-001 (device-001) ... back in 2608 ms (runner clock)
+  [2/20] killed edge-device-002 (device-002) ... back in 2682 ms (runner clock)
+  [3/20] killed edge-device-003 (device-003) ... back in 1923 ms (runner clock)
+  [4/20] killed device-001-r-6b4810f5e9 (device-001) ... back in 1854 ms (runner clock)
+  [5/20] killed device-002-r-3f5fc4368b (device-002) ... back in 1879 ms (runner clock)
+  [6/20] killed device-003-r-59fe6d16c3 (device-003) ... back in 1827 ms (runner clock)
+  [7/20] killed device-001-r-f288b80d71 (device-001) ... back in 1819 ms (runner clock)
+  [8/20] killed device-002-r-3bd37f2395 (device-002) ... back in 2167 ms (runner clock)
+  [9/20] killed device-003-r-482edd8870 (device-003) ... back in 1843 ms (runner clock)
+  [10/20] killed device-001-r-edef6f0dd7 (device-001) ... back in 1913 ms (runner clock)
+  [11/20] killed device-002-r-c43b137ddb (device-002) ... back in 2142 ms (runner clock)
+  [12/20] killed device-003-r-8a548f18b9 (device-003) ... back in 1812 ms (runner clock)
+  [13/20] killed device-001-r-93d7a0817a (device-001) ... back in 1838 ms (runner clock)
+  [14/20] killed device-002-r-e31d2b7504 (device-002) ... back in 2103 ms (runner clock)
+  [15/20] killed device-003-r-543ebbbee5 (device-003) ... back in 1849 ms (runner clock)
+  [16/20] killed device-001-r-a67c188d06 (device-001) ... back in 2118 ms (runner clock)
+  [17/20] killed device-002-r-f8242bb4ef (device-002) ... back in 1829 ms (runner clock)
+  [18/20] killed device-003-r-7e47740153 (device-003) ... back in 2093 ms (runner clock)
+  [19/20] killed device-001-r-212f2bee91 (device-001) ... back in 1840 ms (runner clock)
+  [20/20] killed device-002-r-6b51851c64 (device-002) ... back in 1815 ms (runner clock)
+
+[1m==> collecting[0m
+  duration recorded: 215 s
+  device.recovery records captured: 40
+  iterations that did not recover : 0
+
+[1m==> summary[0m
+  rows                : 20
+  failures injected   : 20
+  recovered           : 20 (100.0%)
+  MTTR (gateway)      : n=20 min=1089 ms median=1332.5 ms p90=1602 ms max=1981 ms mean=1373.5 ms
+  operator half       : n=20 min=48 ms median=80.5 ms p90=115 ms max=263 ms mean=87.9 ms
+  runner observed     : n=20 min=1812 ms median=1866.5 ms p90=2167 ms max=2682 ms mean=1997.7 ms
+  wrote               : /Users/aizen/Desktop/project-java/experiments/results/processed/b1-pod-loss-20260827T144232Z.csv
+                        /Users/aizen/Desktop/project-java/experiments/results/processed/b1-pod-loss-20260827T144232Z-summary.md
+
+run recorded: /Users/aizen/Desktop/project-java/experiments/results/raw/b1-pod-loss-20260827T144232Z

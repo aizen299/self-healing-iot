@@ -51,7 +51,11 @@ merged:
   These are the measurements, taken by the components that own the events
   being timed.
 - **External.** The runner records wall-clock time from `kubectl delete`
-  returning to the gateway's HTTP API reporting `ONLINE`, polled at 4 Hz.
+  returning to the gateway's HTTP API reporting `ONLINE`, polled on a 250 ms
+  sleep — slightly under 4 Hz, since each poll pays for its own HTTP round
+  trip. The interval is stated rather than a rate because the rate is a
+  consequence, and this number is load-bearing in the explanation of the gap
+  between the two views.
 
 The external number is always larger — it includes a poll interval and an API
 round trip, and it starts before detection has happened. It is not a better or
@@ -88,14 +92,31 @@ run regardless. A recovery-success-rate of 100% means nothing if the runs that
 were not 100% were quietly deleted.
 
 The one thing that does justify discarding a run is a broken apparatus, and
-the first Phase 11 run was discarded on exactly that ground: its
-`metadata.json` recorded `"publishing interval: None"`, because the script
-read three ConfigMap keys of which two did not exist. The numbers were real,
-but the contract requires the publishing interval, and back-filling metadata
-after the fact is precisely what makes a reproducibility record worthless. The
-run was re-taken after the script was changed to capture each process's own
-startup header — which reports effective configuration, including values that
-came from a code default and appear in no ConfigMap at all.
+Phase 11 discarded two runs on exactly that ground before recording one.
+
+The first recorded `"publishing interval: None"`, because the script read
+three ConfigMap keys of which two did not exist. It was re-taken after the
+script was changed to capture each process's own startup header — which
+reports effective configuration, including values that came from a code
+default and appear in no ConfigMap at all.
+
+The second survived that fix and was still short two contract fields, both
+found by review rather than by the script noticing: `toolchain.java` was the
+empty string, because `java -version` writes to stderr and the capture read
+stdout; and no duration was recorded anywhere, because `metadata.json` is
+written before the first failure is injected and was never updated afterwards.
+
+The numbers in both runs were real. That is exactly why they were discarded:
+plausible numbers with an incomplete record are more dangerous than obviously
+broken ones, because nothing about them invites a second look. Back-filling
+metadata after the fact is what makes a reproducibility record worthless, so
+the only honest options are to re-take the run or to publish nothing.
+
+The lesson is recorded here rather than only fixed: **an apparatus that
+records a required field as empty must fail, not shrug.** The preflight now
+refuses to start when it cannot reach the endpoint the measurement loop
+depends on, for the same reason — a run whose apparatus is broken should not
+be able to produce a confident-looking 0%.
 
 ## Consequences
 

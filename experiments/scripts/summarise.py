@@ -84,22 +84,27 @@ def join(operator_actions, gateway_recoveries):
     recovery be credited to the next iteration's failure.
     """
     by_device = {}
-    for event in gateway_recoveries:
-        by_device.setdefault(event["deviceId"], []).append(event)
+    for index, event in enumerate(gateway_recoveries):
+        by_device.setdefault(event["deviceId"], []).append((index, event))
     for events in by_device.values():
-        events.sort(key=lambda e: e["at"])
+        events.sort(key=lambda pair: pair[1]["at"])
 
+    # A set of claimed indices, not a flag written into the records. These
+    # dicts are the raw file parsed; adding a field to them would leave the
+    # caller holding records carrying a key the recording never had, and this
+    # module's claim is that processing is a pure function of the recording.
+    claimed = set()
     rows, unmatched = [], 0
     for action in sorted(operator_actions, key=lambda a: a.get("actedAt", 0)):
         device = action["deviceId"]
         acted = action.get("actedAt")
         match = None
-        for event in by_device.get(device, []):
-            if event.get("consumed"):
+        for index, event in by_device.get(device, []):
+            if index in claimed:
                 continue
             if acted is None or event["at"] >= acted:
                 match = event
-                event["consumed"] = True
+                claimed.add(index)
                 break
         if match is None and action.get("outcome") == "REPLACED":
             unmatched += 1
@@ -119,7 +124,12 @@ def join(operator_actions, gateway_recoveries):
             "mttrMillis": match.get("recoveryDurationMillis") if match else None,
             "missedHeartbeats": match.get("missedHeartbeats") if match else None,
         })
-    return rows, unmatched
+    # The other direction, which nothing counted before: a recovery the
+    # gateway confirmed and no operator action claims. That is what a lost
+    # producer record or a truncated consumer looks like, and building rows
+    # from operator actions alone dropped it out of every figure silently.
+    orphaned = len(gateway_recoveries) - len(claimed)
+    return rows, unmatched, orphaned
 
 
 def main():
@@ -148,7 +158,7 @@ def main():
                           if r.get("kind") != OPERATOR_KIND
                           and r.get("event") == "DEVICE_RECOVERED"]
 
-    rows, unmatched = join(operator_actions, gateway_recoveries)
+    rows, unmatched, orphaned = join(operator_actions, gateway_recoveries)
 
     mttr = [r["mttrMillis"] for r in rows if r["mttrMillis"] is not None]
     operator_half = [r["detectionToReplacementMillis"] for r in rows
@@ -212,10 +222,49 @@ def main():
     add(f"- Devices confirmed back online: **{recovered}**")
     if success is not None:
         add(f"- Recovery success rate: **{success:.1f}%**")
-    add(f"- Operator outcomes: {outcomes or '—'}")
+    if outcomes:
+        add("- Operator outcomes: "
+            + ", ".join(f"{count} × `{name}`" for name, count in sorted(outcomes.items())))
+    else:
+        add("- Operator outcomes: none recorded")
+    add("")
+    add("## Reconciliation")
+    add("")
+    add("Four independent counts of the same run. They should agree; where they "
+        "do not, the difference is stated rather than resolved, because which of "
+        "them is wrong is not something this script can know.")
+    add("")
+    add("| Count | Source | Value |")
+    add("|---|---|---|")
+    add(f"| Failures injected | the runner | {injected} |")
+    add(f"| Recoveries the runner observed | polling the gateway API | {recovered} |")
+    add(f"| Operator actions recorded | `device.recovery` | {len(operator_actions)} |")
+    add(f"| Gateway recoveries recorded | `device.recovery` | {len(gateway_recoveries)} |")
+    add("")
+    discrepancies = []
+    if injected and len(operator_actions) != injected:
+        discrepancies.append(
+            f"the operator recorded {len(operator_actions)} actions for {injected} "
+            "injected failures — a consumer that stopped part-way through the run "
+            "looks exactly like this")
     if unmatched:
-        add(f"- Replacements with no matching gateway confirmation: **{unmatched}** "
-            "(counted, not dropped)")
+        discrepancies.append(
+            f"{unmatched} replacement(s) have no matching gateway confirmation")
+    if orphaned:
+        discrepancies.append(
+            f"{orphaned} gateway recovery/recoveries are claimed by no operator action")
+    if recovered != len(mttr) and injected:
+        discrepancies.append(
+            f"the runner observed {recovered} recoveries but the gateway timed "
+            f"{len(mttr)} — a transition completing between two polls reads as a "
+            "failure from outside and as a success from inside")
+    if discrepancies:
+        add("**The counts disagree:**")
+        add("")
+        for item in discrepancies:
+            add(f"- {item}")
+    else:
+        add("All four counts agree.")
     add("")
     add("## MTTR — detection to confirmed heartbeats")
     add("")
@@ -234,7 +283,8 @@ def main():
     add("## Cross-check — the runner's external view")
     add("")
     add("Wall-clock time from `kubectl delete` returning to the gateway reporting "
-        "`ONLINE`, polled at 4 Hz from outside the cluster. It should exceed MTTR: "
+        "`ONLINE`, polled on a 250 ms sleep from outside the cluster. It should "
+        "exceed MTTR: "
         "it includes the poll interval and the API round trip, and it starts "
         "before the gateway has detected anything. Recorded separately so a "
         "disagreement with the system's own numbers is visible rather than "
@@ -242,6 +292,12 @@ def main():
     add("")
     add(stat_table(observed_stats))
     add("")
+    poll_errors = sum(i.get("pollErrors", 0) for i in iterations)
+    if poll_errors:
+        add(f"**{poll_errors} health poll(s) failed** during the run. A poll that "
+            "cannot reach the gateway is an apparatus failure, not a device that "
+            "did not recover; it is counted here so the two are not confused.")
+        add("")
     if malformed:
         add(f"**{malformed} malformed record(s)** were skipped while reading "
             "`recovery.jsonl`.")
@@ -263,9 +319,27 @@ def main():
     print(f"  MTTR (gateway)      : {format_stats(mttr_stats)}")
     print(f"  operator half       : {format_stats(operator_stats)}")
     print(f"  runner observed     : {format_stats(observed_stats)}")
+    if orphaned or unmatched or (injected and len(operator_actions) != injected):
+        print(f"  RECONCILIATION      : counts disagree — see the summary")
     print(f"  wrote               : {csv_path}")
     print(f"                        {summary_path}")
     return 0
+
+
+def ms(value):
+    """A millisecond figure, without a decimal it did not earn.
+
+    statistics.median returns a float for an even sample, so a median of two
+    integer measurements printed as "1399.0 ms" — one decimal of precision
+    that the samples do not carry.
+    """
+    if value is None:
+        return "—"
+    if isinstance(value, float) and value.is_integer():
+        return f"{int(value)} ms"
+    if isinstance(value, float):
+        return f"{value:.1f} ms"
+    return f"{value} ms"
 
 
 def stat_table(stats):
@@ -274,16 +348,16 @@ def stat_table(stats):
     return "\n".join([
         "| n | min | median | p90 | max | mean |",
         "|---|---|---|---|---|---|",
-        f"| {stats['n']} | {stats['min']} ms | {stats['median']} ms | "
-        f"{stats['p90']} ms | {stats['max']} ms | {stats['mean']} ms |",
+        f"| {stats['n']} | {ms(stats['min'])} | {ms(stats['median'])} | "
+        f"{ms(stats['p90'])} | {ms(stats['max'])} | {ms(stats['mean'])} |",
     ])
 
 
 def format_stats(stats):
     if not stats.get("n"):
         return "no samples"
-    return (f"n={stats['n']} min={stats['min']} median={stats['median']} "
-            f"p90={stats['p90']} max={stats['max']} mean={stats['mean']} ms")
+    return (f"n={stats['n']} min={ms(stats['min'])} median={ms(stats['median'])} "
+            f"p90={ms(stats['p90'])} max={ms(stats['max'])} mean={ms(stats['mean'])}")
 
 
 if __name__ == "__main__":
