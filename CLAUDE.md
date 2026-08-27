@@ -27,13 +27,20 @@ engineering discipline on a modern JVM." The two evaluated pillars are:
 
 No numeric result may ever be reported (docs, README, presentation, code
 comments) unless it was produced by an actual recorded experiment run in
-`experiments/`. Never fabricate benchmark results.
+`experiments/`. Never fabricate benchmark results. As of Phase 11 exactly one
+run qualifies (`b1-pod-loss-20260827T144232Z`); everything else in the repo
+that looks like a figure is still labelled a demonstration, and must stay
+that way until a run produces it.
 
 ## Current status
 
-**Phases 1–10 complete — a self-healing fleet you can watch.** A device that
-dies is detected, replaced, and back online with nobody touching it, and
-Prometheus and Grafana show it happening. Phase 7 was taken before Phase 6
+**Phases 1–11 complete — a self-healing fleet you can watch, and now
+measure.** A device that dies is detected, replaced, and back online with
+nobody touching it; Prometheus and Grafana show it happening; and Phase 11
+recorded the first real results — 20 samples of MTTR and a recovery success
+rate, under the reproducibility contract. See
+`docs/experiments/pillar-b-recovery.md`. Pillars A and C are still unmeasured
+and the writeup index says so. Phase 7 was taken before Phase 6
 (ADR-008): Kafka and a real TSDB both need a server, and containers supply
 them. The phase numbers still identify the work, but no longer its order.
 Every module is implemented and tested.

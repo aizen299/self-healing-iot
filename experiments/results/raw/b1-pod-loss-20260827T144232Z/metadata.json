@@ -1,0 +1,89 @@
+{
+  "runId": "b1-pod-loss-20260827T144232Z",
+  "experimentId": "b1-pod-loss",
+  "pillar": "B - automated failure detection and recovery",
+  "startedAtUtc": "2026-08-27T14:42:33Z",
+  "baseline": "experiments/environment-baseline.md",
+  "machine": {
+    "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "arch": "arm64",
+    "cpuCount": 8,
+    "memoryBytes": 8589934592
+  },
+  "toolchain": {
+    "jvm": "OpenJDK 64-Bit Server VM 21.0.12",
+    "jvmSource": "startup banner of the containerised processes",
+    "kind": "kind v0.32.0 go1.26.3 darwin/arm64",
+    "kubernetesServer": "v1.36.1",
+    "docker": "Docker version 29.7.2, build a7dcaa6fdb",
+    "hostJavaOnPath": [
+      "java version \"21.0.9\" 2025-10-21 LTS"
+    ]
+  },
+  "fleet": {
+    "model": "one device per pod (bare Pods, restartPolicy: Never - ADR-010)",
+    "deviceCount": 3,
+    "deviceIds": [
+      "device-001",
+      "device-002",
+      "device-003"
+    ],
+    "tickIntervalMs": "1000",
+    "variant": "constrained",
+    "heapLimit": "-Xmx64m",
+    "sink": "mqtt",
+    "devicesPerPod": "1",
+    "gatewayStartupConfig": [
+      "=== gateway (Phase 3) ===",
+      "broker            : tcp://broker:1883",
+      "client id         : fleet-gateway",
+      "subscription QoS  : 1",
+      "heartbeat expected: every 1000 ms",
+      "suspect / offline : 2 / 4 missed heartbeats",
+      "recovery confirms : 2 heartbeats",
+      "run duration      : until interrupted",
+      "jvm               : OpenJDK 64-Bit Server VM 21.0.12"
+    ],
+    "deviceStartupConfig": [
+      "=== edge-device simulator (Phase 2) ===",
+      "variant           : CONSTRAINED",
+      "sink              : MQTT (tcp://broker:1883, QoS 0)",
+      "devices           : 1",
+      "publish interval  : 1000 ms",
+      "run duration      : 86400 s",
+      "failure mode      : NONE",
+      "seed              : 42",
+      "jvm               : OpenJDK 64-Bit Server VM 21.0.12",
+      "max heap          : 61.9 MiB",
+      "collectors        : Copy, MarkSweepCompact"
+    ],
+    "operatorStartupConfig": [
+      "=== recovery operator (Phase 9) ===",
+      "kafka             : kafka-0.kafka.fleet.svc.cluster.local:9092",
+      "consumer group    : fleet-recovery-operator",
+      "namespace         : fleet",
+      "device app label  : edge-device",
+      "device id prefix  : device",
+      "replace live pods : false",
+      "run duration      : until interrupted",
+      "jvm               : OpenJDK 64-Bit Server VM 21.0.12"
+    ]
+  },
+  "experiment": {
+    "failureMode": "pod-loss",
+    "iterations": 20,
+    "cooldownSeconds": 8,
+    "recoveryTimeoutSeconds": 60,
+    "pollSleepSeconds": 0.25
+  },
+  "images": {
+    "error: error parsing jsonpath {range .items[*]}{.metadata.name}{'": "'}{.spec.containers[0].image}{'"
+  },
+  "notes": [
+    "Numbers in recovery.jsonl are the system's own measurements.",
+    "iterations.jsonl holds the runner's external view, as a cross-check.",
+    "MTTR is the gateway's recoveryDurationMillis. The operator's detectionToReplacementMillis is a component of it and the two must never be added."
+  ],
+  "finishedAtUtc": "2026-08-27T14:46:07Z",
+  "durationSeconds": 215
+}

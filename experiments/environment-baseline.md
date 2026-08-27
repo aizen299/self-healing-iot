@@ -1,6 +1,8 @@
 # Environment baseline
 
-Recorded 2026-08-23. This is the reference machine for all experiments
+Recorded 2026-08-23, toolchain refreshed 2026-08-25 when Phase 11 began
+producing results (the Docker and kubectl rows had said "not yet enabled"
+since Phase 6). This is the reference machine for all experiments
 unless a specific run records otherwise. The reproducibility contract in
 `README.md` requires these facts alongside every result; capturing them
 once here keeps individual run records short — a run only needs to note
@@ -24,8 +26,10 @@ what *differs* from this baseline.
 | `JAVA_HOME` | `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` |
 | Maven | 3.9.16 |
 | Mosquitto | 2.1.2 |
-| Docker CLI / Compose | 29.7.2 / v5.4.0 (daemon not yet enabled — Phase 7) |
-| kubectl | v1.36.1 (no local cluster yet — Phase 8) |
+| Docker CLI / Compose | 29.7.2 / v5.4.0 |
+| kubectl | v1.36.1 |
+| kind | v0.32.0 (go1.26.3, darwin/arm64) — one-node cluster, Kubernetes v1.36.1 |
+| Prometheus / Grafana | v3.1.0 / 11.5.1, both pinned by digest |
 
 Capture the exact runtime string in each run's raw output:
 
@@ -58,6 +62,13 @@ Two consequences follow, both settled before Phase 1 (see ADR-003):
    one-process-per-device is reserved for the Phase 9 recovery demo at
    roughly 3–10 devices. The two models are not interchangeable for
    Pillar C, so every recorded run must state which one produced it.
+
+   Phase 11's recovery experiments are therefore **one device per pod at 3
+   devices**, and every run's `metadata.json` records that under
+   `fleet.model`. Recovery cannot be measured in the shared harness at all:
+   what recovers a device there is nothing, because there is no pod for the
+   operator to replace. An MTTR figure and a fleet-size figure in this project
+   come from different vehicles, and neither substitutes for the other.
 
 Note this constraint does not weaken the thesis. Resource limitation is
 the subject of the research — but it has to be a declared parameter of

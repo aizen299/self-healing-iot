@@ -31,6 +31,14 @@ Thumbs.db
 *.log
 logs/
 
+# ...except an experiment's own transcript. experiments/results/ is
+# deliberately not ignored — the reproducibility contract requires raw and
+# processed data to be committed, and the console transcript of the run that
+# produced a number is part of that raw record. The blanket rule above was
+# quietly swallowing it, which is the kind of gap that turns a committed
+# result into an unverifiable one.
+!experiments/results/**/*.log
+
 # Env / secrets
 .env
 .env.*
