@@ -203,7 +203,7 @@ record_run() {
   GATEWAY_SUSPECT_AFTER_MISSES="$SUSPECT_AFTER_MISSES" \
   GATEWAY_OFFLINE_AFTER_MISSES="$OFFLINE_AFTER_MISSES" \
   GATEWAY_STORE_PATH="$store/fleet" \
-  GATEWAY_RUN_DURATION_SECONDS="$((RUN_DURATION_SECONDS + 15))" \
+  GATEWAY_RUN_DURATION_SECONDS="$((RUN_DURATION_SECONDS + 300))" \
   MQTT_BROKER_URL="$BROKER_URL" \
     /usr/bin/time -l "$JAVA" "-Xmx$GATEWAY_HEAP_CAP" \
       -cp "$CLASSPATH" io.fleet.gateway.Main \
@@ -279,11 +279,19 @@ record_run() {
     > "$RAW/$tag.health-final.json" 2>/dev/null || true
   set -e
 
-  # Waited out rather than killed. `/usr/bin/time` writes its report when the
-  # process it is timing exits; killing the wrapper kills it first, and the
-  # gateway's CPU and resident set are then simply absent — which is what the
-  # first rehearsal of this script produced. The gateway is given its own run
-  # duration instead and allowed to finish.
+  # The JVM is signalled, not the `/usr/bin/time` wrapping it. `time` writes
+  # its report when the process it timed exits, so killing the wrapper loses
+  # the gateway's CPU and resident set entirely — the first rehearsal of this
+  # script did exactly that. Killing the child instead leaves `time` to
+  # observe the exit and report.
+  #
+  # This replaces waiting on the gateway's own timer, which coupled the
+  # sampling to how long the fleet took to connect: at 50 devices the ramp ate
+  # the margin and the post-drain sample landed after the gateway had already
+  # exited, so the delivery figure came back missing for every run above 10
+  # devices. GATEWAY_RUN_DURATION_SECONDS is now only a backstop against a
+  # hang, not the thing that ends the run.
+  pkill -TERM -P "$GW_PID" 2>/dev/null || true
   wait "$GW_PID" 2>/dev/null || true
   GW_PID=""
 
