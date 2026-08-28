@@ -1,0 +1,10 @@
+runTag,deviceCount,repetition,exitCode,fleet.throughputPerSecond,fleet.process_cpuSeconds,fleet.process_maxResidentBytes,fleet.gcCollections,gateway.cpuSeconds,gateway.maxResidentBytes,delivery.published,delivery.acceptedFinal,delivery.ratio,ingest.failuresDetected,detection.medianMillis
+n10-rep1,10,1,0,10.0,1.05,67.921875,1,2.01,96.65625,601,601,1.0,10,4124
+n10-rep2,10,2,0,10.0,1.22,68.78125,1,2.27,96.96875,600,600,1.0,10,4129
+n10-rep3,10,3,0,10.0,1.25,61.90625,1,2.28,96.59375,601,601,1.0,10,4140
+n25-rep1,25,1,0,25.0,2.06,67.15625,0,3.29,96.46875,1501,1501,1.0,25,4125
+n25-rep2,25,2,0,25.0,2.02,76.625,0,3.3,96.703125,1500,1500,1.0,25,4120
+n25-rep3,25,3,0,25.0,2.03,71.421875,0,3.15,96.890625,1501,1501,1.0,25,4125
+n50-rep1,50,1,0,50.0,3.2,79.78125,0,4.74,118.296875,3001,3001,1.0,50,4131
+n50-rep2,50,2,0,50.0,3.16,77.40625,0,4.65,116.828125,3001,3001,1.0,50,4128
+n50-rep3,50,3,0,50.0,3.19,85.046875,0,4.41,117.984375,3001,3001,1.0,50,4123

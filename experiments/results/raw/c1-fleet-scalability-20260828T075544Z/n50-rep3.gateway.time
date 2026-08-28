@@ -1,0 +1,68 @@
+device device-001 declared OFFLINE after 4 missed heartbeats
+device device-002 declared OFFLINE after 4 missed heartbeats
+device device-003 declared OFFLINE after 4 missed heartbeats
+device device-004 declared OFFLINE after 4 missed heartbeats
+device device-005 declared OFFLINE after 4 missed heartbeats
+device device-006 declared OFFLINE after 4 missed heartbeats
+device device-007 declared OFFLINE after 4 missed heartbeats
+device device-008 declared OFFLINE after 4 missed heartbeats
+device device-009 declared OFFLINE after 4 missed heartbeats
+device device-010 declared OFFLINE after 4 missed heartbeats
+device device-011 declared OFFLINE after 4 missed heartbeats
+device device-012 declared OFFLINE after 4 missed heartbeats
+device device-013 declared OFFLINE after 4 missed heartbeats
+device device-014 declared OFFLINE after 4 missed heartbeats
+device device-015 declared OFFLINE after 4 missed heartbeats
+device device-016 declared OFFLINE after 4 missed heartbeats
+device device-017 declared OFFLINE after 4 missed heartbeats
+device device-018 declared OFFLINE after 4 missed heartbeats
+device device-019 declared OFFLINE after 4 missed heartbeats
+device device-020 declared OFFLINE after 4 missed heartbeats
+device device-021 declared OFFLINE after 4 missed heartbeats
+device device-022 declared OFFLINE after 4 missed heartbeats
+device device-023 declared OFFLINE after 4 missed heartbeats
+device device-024 declared OFFLINE after 4 missed heartbeats
+device device-025 declared OFFLINE after 4 missed heartbeats
+device device-026 declared OFFLINE after 4 missed heartbeats
+device device-027 declared OFFLINE after 4 missed heartbeats
+device device-028 declared OFFLINE after 4 missed heartbeats
+device device-029 declared OFFLINE after 4 missed heartbeats
+device device-030 declared OFFLINE after 4 missed heartbeats
+device device-031 declared OFFLINE after 4 missed heartbeats
+device device-032 declared OFFLINE after 4 missed heartbeats
+device device-033 declared OFFLINE after 4 missed heartbeats
+device device-034 declared OFFLINE after 4 missed heartbeats
+device device-035 declared OFFLINE after 4 missed heartbeats
+device device-036 declared OFFLINE after 4 missed heartbeats
+device device-037 declared OFFLINE after 4 missed heartbeats
+device device-038 declared OFFLINE after 4 missed heartbeats
+device device-039 declared OFFLINE after 4 missed heartbeats
+device device-040 declared OFFLINE after 4 missed heartbeats
+device device-041 declared OFFLINE after 4 missed heartbeats
+device device-042 declared OFFLINE after 4 missed heartbeats
+device device-043 declared OFFLINE after 4 missed heartbeats
+device device-044 declared OFFLINE after 4 missed heartbeats
+device device-045 declared OFFLINE after 4 missed heartbeats
+device device-046 declared OFFLINE after 4 missed heartbeats
+device device-047 declared OFFLINE after 4 missed heartbeats
+device device-048 declared OFFLINE after 4 missed heartbeats
+device device-049 declared OFFLINE after 4 missed heartbeats
+device device-050 declared OFFLINE after 4 missed heartbeats
+       85.13 real         3.98 user         0.43 sys
+           123715584  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               13218  page reclaims
+                  12  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 309  messages sent
+               17163  messages received
+                   2  signals received
+                 202  voluntary context switches
+               24489  involuntary context switches
+         15473490870  instructions retired
+          9301992017  cycles elapsed
+           120374232  peak memory footprint

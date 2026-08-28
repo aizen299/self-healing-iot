@@ -1,0 +1,28 @@
+device device-001 declared OFFLINE after 4 missed heartbeats
+device device-002 declared OFFLINE after 4 missed heartbeats
+device device-003 declared OFFLINE after 4 missed heartbeats
+device device-004 declared OFFLINE after 4 missed heartbeats
+device device-005 declared OFFLINE after 4 missed heartbeats
+device device-006 declared OFFLINE after 4 missed heartbeats
+device device-007 declared OFFLINE after 4 missed heartbeats
+device device-008 declared OFFLINE after 4 missed heartbeats
+device device-009 declared OFFLINE after 4 missed heartbeats
+device device-010 declared OFFLINE after 4 missed heartbeats
+       72.18 real         1.82 user         0.19 sys
+           101351424  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               11744  page reclaims
+                   1  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  59  messages sent
+                3413  messages received
+                   2  signals received
+                 427  voluntary context switches
+               11094  involuntary context switches
+          8009578387  instructions retired
+          4774028907  cycles elapsed
+            86082520  peak memory footprint

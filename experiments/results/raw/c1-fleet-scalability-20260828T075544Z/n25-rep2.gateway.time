@@ -1,0 +1,43 @@
+device device-001 declared OFFLINE after 4 missed heartbeats
+device device-002 declared OFFLINE after 4 missed heartbeats
+device device-003 declared OFFLINE after 4 missed heartbeats
+device device-004 declared OFFLINE after 4 missed heartbeats
+device device-005 declared OFFLINE after 4 missed heartbeats
+device device-006 declared OFFLINE after 4 missed heartbeats
+device device-007 declared OFFLINE after 4 missed heartbeats
+device device-008 declared OFFLINE after 4 missed heartbeats
+device device-009 declared OFFLINE after 4 missed heartbeats
+device device-010 declared OFFLINE after 4 missed heartbeats
+device device-011 declared OFFLINE after 4 missed heartbeats
+device device-012 declared OFFLINE after 4 missed heartbeats
+device device-013 declared OFFLINE after 4 missed heartbeats
+device device-014 declared OFFLINE after 4 missed heartbeats
+device device-015 declared OFFLINE after 4 missed heartbeats
+device device-016 declared OFFLINE after 4 missed heartbeats
+device device-017 declared OFFLINE after 4 missed heartbeats
+device device-018 declared OFFLINE after 4 missed heartbeats
+device device-019 declared OFFLINE after 4 missed heartbeats
+device device-020 declared OFFLINE after 4 missed heartbeats
+device device-021 declared OFFLINE after 4 missed heartbeats
+device device-022 declared OFFLINE after 4 missed heartbeats
+device device-023 declared OFFLINE after 4 missed heartbeats
+device device-024 declared OFFLINE after 4 missed heartbeats
+device device-025 declared OFFLINE after 4 missed heartbeats
+       76.81 real         3.00 user         0.30 sys
+           101400576  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               15104  page reclaims
+                   6  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 184  messages sent
+                8659  messages received
+                   2  signals received
+                 210  voluntary context switches
+               16485  involuntary context switches
+         12851217732  instructions retired
+          7331582026  cycles elapsed
+            95241128  peak memory footprint

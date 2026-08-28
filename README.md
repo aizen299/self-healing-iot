@@ -168,12 +168,16 @@ four every time, for **2.6× less CPU** and **1.6× less resident memory**. The
 throughput row is the control that licenses the rest: this is not a fast
 implementation beating a slow one, it is the same work for less machine
 ([pillar-a-constrained-vs-naive.md](docs/experiments/pillar-a-constrained-vs-naive.md)).
-Pillar C — scalability against device count — is **deliberately not
-measured**: its recovery-latency half needs one device per pod, and a per-pod
-JVM's baseline against this host's 8 GB would produce a curve describing the
-laptop rather than the system. The reasoning is in
-[`docs/experiments/README.md`](docs/experiments/README.md), stated in the open
-rather than left looking pending.
+**And the fleet scales.** From 10 to 50 devices over the real MQTT path, every
+reading published was a reading accepted — 3001 of 3001 at 50 devices, in every
+repetition, on a transport that guarantees nothing (QoS 0). Detection stayed
+flat at ~4128 ms against a 4000 ms policy floor while the simultaneous failures
+went from ten to fifty, and per-device cost fell throughout. The gateway used
+about 7% of one core at the top of the range, so this describes a system with
+headroom rather than one near its limit
+([pillar-c-scalability.md](docs/experiments/pillar-c-scalability.md)). Recovery
+latency against device count is the one half not measured: it needs one device
+per pod, and this host cannot hold that fleet.
 
 **Every change now passes a gate.** CI builds and tests against a real broker
 on each pull request, checks the shell scripts that make up the experiment
@@ -231,7 +235,7 @@ feature set. It attaches to the build phases as follows:
 |---|---|---|
 | A — **measured** ([writeup](docs/experiments/pillar-a-constrained-vs-naive.md)) — constrained vs. naive Java under an identical heap cap | GC behaviour, resident memory, CPU, throughput | Phase 1 (both variants exist); measured on the shared harness under `-Xmx64m` |
 | B — **measured** ([writeup](docs/experiments/pillar-b-recovery.md)) — automated failure detection and recovery | MTTR, recovery success rate | Phases 4 and 9; measured in Phase 11 |
-| C — Fleet scalability | messages/sec, gateway CPU/memory, detection and recovery latency vs. device count | Phases 3–6, re-run after Phase 8 |
+| C — **measured** ([writeup](docs/experiments/pillar-c-scalability.md)) — fleet scalability | messages/sec, fleet and gateway CPU/memory, detection latency vs. device count (recovery latency vs. count not measured — needs one device per pod) | Phases 3–6, measured over the real MQTT path at 10 → 25 → 50 |
 
 Every run must satisfy the reproducibility contract in
 `experiments/README.md`. No numeric result appears anywhere in this
