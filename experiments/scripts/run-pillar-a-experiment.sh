@@ -99,6 +99,10 @@ total=$((REPETITIONS * 2))
 echo "  about $(( total * (RUN_DURATION_SECONDS + 3) / 60 )) minutes"
 
 # --- metadata -------------------------------------------------------------
+# Captured before the first run, so the elapsed time written at the end is the
+# whole experiment's rather than the summarising step's.
+RUN_STARTED_EPOCH=$(date +%s)
+
 # Quoted heredoc, every value passed through the environment. An unquoted one
 # lets the shell expand anything it recognises inside what is meant to be
 # program text — Phase 11 lost a run to a pair of backticks in a comment.
@@ -229,6 +233,33 @@ for rep in $(seq 1 "$REPETITIONS"); do
 done
 
 # --- summarise ------------------------------------------------------------
+# The elapsed time of the whole experiment, written now rather than guessed
+# later. metadata.json is created before the first run, so without this the
+# record says when the experiment started and never when it ended — which is
+# one of the two omissions that cost Phase 11 a run (ADR-013). Per-run wall
+# time is in runs.jsonl either way; this is the figure the reproducibility
+# contract asks for, and it is recorded rather than derived.
+say "recording the elapsed time"
+RUN_STARTED_EPOCH="$RUN_STARTED_EPOCH" python3 - "$RAW/metadata.json" <<'COMPLETION'
+import json, os, subprocess, sys
+
+path = sys.argv[1]
+with open(path) as handle:
+    metadata = json.load(handle)
+
+ended = subprocess.run(["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"],
+                       capture_output=True, text=True).stdout.strip()
+metadata["completedAt"] = ended
+metadata["durationSeconds"] = int(
+    subprocess.run(["date", "+%s"], capture_output=True, text=True).stdout.strip()
+) - int(os.environ["RUN_STARTED_EPOCH"])
+
+with open(path, "w") as handle:
+    json.dump(metadata, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+print(f"  {metadata['durationSeconds']}s, ended {ended}")
+COMPLETION
+
 say "summarising"
 python3 "$ROOT/experiments/scripts/summarise-pillar-a.py" "$RAW"
 
