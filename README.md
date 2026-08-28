@@ -168,7 +168,12 @@ four every time, for **2.6× less CPU** and **1.6× less resident memory**. The
 throughput row is the control that licenses the rest: this is not a fast
 implementation beating a slow one, it is the same work for less machine
 ([pillar-a-constrained-vs-naive.md](docs/experiments/pillar-a-constrained-vs-naive.md)).
-Pillar C remains unmeasured and the index says so.
+Pillar C — scalability against device count — is **deliberately not
+measured**: its recovery-latency half needs one device per pod, and a per-pod
+JVM's baseline against this host's 8 GB would produce a curve describing the
+laptop rather than the system. The reasoning is in
+[`docs/experiments/README.md`](docs/experiments/README.md), stated in the open
+rather than left looking pending.
 
 **Every change now passes a gate.** CI builds and tests against a real broker
 on each pull request, checks the shell scripts that make up the experiment
