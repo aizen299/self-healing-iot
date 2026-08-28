@@ -157,10 +157,18 @@ failures into a running cluster and recorded what happened:
 which the operator's own share — decide, then get the API server to accept a
 replacement — is 6.4%. The rest is a JVM starting and reconnecting. Two runs
 before it were discarded for a broken apparatus rather than a bad result. This
-is the project's only recorded result so far; Pillars A and C are still
-unmeasured and the writeups say so
 ([pillar-b-recovery.md](docs/experiments/pillar-b-recovery.md),
 [ADR-013](docs/decisions/ADR-013-chaos-and-where-results-come-from.md)).
+
+**And the thesis itself is measured.** Under one 64 MB cap, doing verifiably
+identical work — same seed, byte-identical payloads, the same 30,003 readings
+at the same 500/s — the constrained variant triggered **zero garbage
+collections** across five 60-second runs where the naive baseline triggered
+four every time, for **2.6× less CPU** and **1.6× less resident memory**. The
+throughput row is the control that licenses the rest: this is not a fast
+implementation beating a slow one, it is the same work for less machine
+([pillar-a-constrained-vs-naive.md](docs/experiments/pillar-a-constrained-vs-naive.md)).
+Pillar C remains unmeasured and the index says so.
 
 **Every change now passes a gate.** CI builds and tests against a real broker
 on each pull request, checks the shell scripts that make up the experiment
@@ -216,7 +224,7 @@ feature set. It attaches to the build phases as follows:
 
 | Pillar | Measured | Depends on |
 |---|---|---|
-| A — Constrained vs. naive Java under an identical heap cap | heap usage, GC behavior, CPU, throughput, latency | Phase 1 (both variants exist); repeated after Phase 7 to confirm containerized runs match |
+| A — **measured** ([writeup](docs/experiments/pillar-a-constrained-vs-naive.md)) — constrained vs. naive Java under an identical heap cap | GC behaviour, resident memory, CPU, throughput | Phase 1 (both variants exist); measured on the shared harness under `-Xmx64m` |
 | B — **measured** ([writeup](docs/experiments/pillar-b-recovery.md)) — automated failure detection and recovery | MTTR, recovery success rate | Phases 4 and 9; measured in Phase 11 |
 | C — Fleet scalability | messages/sec, gateway CPU/memory, detection and recovery latency vs. device count | Phases 3–6, re-run after Phase 8 |
 

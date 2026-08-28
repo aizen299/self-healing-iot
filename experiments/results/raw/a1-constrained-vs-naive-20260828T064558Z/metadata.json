@@ -1,0 +1,40 @@
+{
+  "completedAt": "2026-08-28T06:56:03Z",
+  "config": "experiments/configs/a1-constrained-vs-naive.env",
+  "durationSeconds": 603,
+  "experimentId": "a1-constrained-vs-naive",
+  "machine": {
+    "arch": "arm64",
+    "cpuCount": 8,
+    "cpuModel": "Apple M3",
+    "memoryBytes": "8589934592",
+    "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O"
+  },
+  "notApplicable": {
+    "kafka": "not on this path; the simulator does not reach Kafka",
+    "kubernetes": "the shared harness runs as one JVM on the host, not on a cluster",
+    "mqtt": "sink is COUNTING; no broker is involved (see the config)"
+  },
+  "parameters": {
+    "deviceCount": 50,
+    "failureMode": "NONE",
+    "heapCap": "64m",
+    "publishIntervalMillis": 100,
+    "repetitionsPerVariant": 5,
+    "runDurationSeconds": 60,
+    "seed": 42,
+    "sink": "COUNTING"
+  },
+  "pillar": "A - constrained vs naive Java under an identical heap cap",
+  "runId": "a1-constrained-vs-naive-20260828T064558Z",
+  "source": {
+    "commit": "98f1e4ee28f298dc03647f5d5236ebd120493c55",
+    "uncommittedFiles": 0
+  },
+  "startedAt": "2026-08-28T06:46:00Z",
+  "toolchain": {
+    "java": "openjdk version \"21.0.12.1\" 2026-08-18\nOpenJDK Runtime Environment Homebrew (build 21.0.12.1)\nOpenJDK 64-Bit Server VM Homebrew (build 21.0.12.1, mixed mode, sharing)",
+    "javaHome": "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
+    "maven": "Apache Maven 3.9.16 (2bdd9fddda4b155ebf8000e807eb73fd829a51d5)"
+  }
+}

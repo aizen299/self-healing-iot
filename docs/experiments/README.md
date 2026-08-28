@@ -13,10 +13,10 @@ the root `README.md` for the pillar-to-phase mapping.
 
 | Writeup | Pillar | Status |
 |---|---|---|
+| [`pillar-a-constrained-vs-naive.md`](pillar-a-constrained-vs-naive.md) | A — constrained vs. naive | **Recorded**: 5 repetitions of each variant under one 64 MB cap. Identical work; zero GC collections against four, 2.6× less CPU |
 | [`pillar-b-recovery.md`](pillar-b-recovery.md) | B — detection and recovery | **Recorded**, Phase 11: 20 samples, MTTR and recovery success rate |
-| Pillar A — constrained vs. naive | A | Not yet run. Both variants have existed since Phase 1; the comparison needs a harness run under an identical heap cap |
 | Pillar C — fleet scalability | C | Not yet run. Needs the shared harness at 10 → 25 → 50 devices |
 
-Only the first row is a result. The other two are stated as absent rather than
-left to be inferred, because a reader who finds two of three pillars missing
-should find out here rather than by not finding a file.
+Two of the three are results. The third is stated as absent rather than left
+to be inferred, because a reader who finds a pillar missing should find out
+here rather than by not finding a file.

@@ -39,8 +39,11 @@ and back online with nobody touching it; Prometheus and Grafana show it
 happening; Phase 11 recorded the first real results — 20 samples of MTTR and a
 recovery success rate, under the reproducibility contract; Phase 12 puts a gate
 in front of every change; and Phase 13 reconciles the platform from git while
-keeping its hands off the fleet. See `docs/experiments/pillar-b-recovery.md`. Pillars A
-and C are still unmeasured and the writeup index says so. Phase 7 was taken
+keeping its hands off the fleet. **Pillar A is measured too**: under one 64 MB
+cap and doing byte-identical work, the constrained variant records zero GC
+collections against the naive baseline's four, for 2.6× less CPU — see
+`docs/experiments/pillar-a-constrained-vs-naive.md`. See `docs/experiments/pillar-b-recovery.md`. Pillar C
+is still unmeasured and the writeup index says so. Phase 7 was taken
 before Phase 6
 (ADR-008): Kafka and a real TSDB both need a server, and containers supply
 them. The phase numbers still identify the work, but no longer its order.
