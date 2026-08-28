@@ -266,6 +266,17 @@ record_run() {
 
   wait "$FLEET_PID"
   rc=$?
+
+  # A second sample, after the fleet has stopped and the gateway has had time
+  # to drain whatever was still in flight. Telemetry is QoS 0 (ADR-004), so a
+  # shortfall against what the fleet published is either loss or lag, and the
+  # mid-run sample alone cannot tell them apart: a gateway that is merely
+  # behind looks exactly like one that dropped messages. If this figure
+  # catches up to the fleet's count it was lag; if it does not, the difference
+  # was lost on the wire.
+  sleep 8
+  curl -fsS --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/health" \
+    > "$RAW/$tag.health-final.json" 2>/dev/null || true
   set -e
 
   # Waited out rather than killed. `/usr/bin/time` writes its report when the

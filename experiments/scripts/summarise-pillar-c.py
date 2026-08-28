@@ -25,7 +25,9 @@ METRICS = [
     ("fleet.gcCollections", "Fleet GC collections", "{:.1f}", "count"),
     ("gateway.cpuSeconds", "Gateway CPU", "{:.2f}", "s"),
     ("gateway.maxResidentBytes", "Gateway resident", "{:.1f}", "MB"),
-    ("ingest.telemetryAccepted", "Telemetry accepted", "{:.0f}", "count"),
+    ("delivery.published", "Telemetry published", "{:.0f}", "count"),
+    ("delivery.acceptedFinal", "Telemetry accepted", "{:.0f}", "count"),
+    ("delivery.ratio", "Delivered", "{:.3f}", "fraction"),
     ("ingest.failuresDetected", "Failures detected", "{:.0f}", "count"),
     ("detection.medianMillis", "Detection latency", "{:.0f}", "ms"),
 ]

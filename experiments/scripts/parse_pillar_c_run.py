@@ -139,15 +139,23 @@ def main():
     fleet_out = read(f"{raw}/{tag}.fleet.out")
     health_text = read(f"{raw}/{tag}.health.json")
 
-    ingest = {}
-    if health_text.strip():
+    def counters(text):
+        if not text.strip():
+            return {}
         try:
-            health = json.loads(health_text)
-            ingest = {k: health[k] for k in INGEST_FIELDS if k in health}
-            if "health" in health:
-                ingest["healthCounts"] = health["health"]
+            health = json.loads(text)
         except json.JSONDecodeError:
-            ingest = {}
+            return {}
+        out = {k: health[k] for k in INGEST_FIELDS if k in health}
+        if "health" in health:
+            out["healthCounts"] = health["health"]
+        return out
+
+    ingest = counters(health_text)
+    # Taken after the fleet stopped and the gateway drained. Telemetry is
+    # QoS 0, so the mid-run sample cannot distinguish a gateway that lost
+    # messages from one that was merely behind; this one can.
+    ingest_final = counters(read(f"{raw}/{tag}.health-final.json"))
 
     record = {
         "runTag": tag,
@@ -161,9 +169,23 @@ def main():
         },
         "gateway": process_cost(read(f"{raw}/{tag}.gateway.time")),
         "ingest": ingest,
+        "ingestFinal": ingest_final,
         "detection": detection(read(f"{raw}/{tag}.devices.jsonl"),
                                int(env["PUBLISH_INTERVAL_MS"])),
     }
+    # Delivery: what the gateway ended up with against what the fleet says it
+    # published. Derived here rather than in the summariser so the per-run
+    # figure is in the record, and reported as absent when either side is.
+    published = record["fleet"].get("readingsPublished")
+    accepted = ingest_final.get("telemetryAccepted")
+    if published and accepted is not None:
+        record["delivery"] = {
+            "published": published,
+            "acceptedFinal": accepted,
+            "lost": published - accepted,
+            "ratio": round(accepted / published, 4),
+        }
+
     if "readingsPublished" not in record["fleet"]:
         record["incomplete"] = "no fleet run summary"
     if not ingest:
