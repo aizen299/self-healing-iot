@@ -94,12 +94,20 @@ def write_csv(out, runs):
 def comparison_line(label, unit, fmt, stats, better):
     """One metric, both variants, and the ratio between them."""
     left, right = stats.get("constrained"), stats.get("naive")
-    if left is None or right is None:
-        missing = " and ".join(v for v in VARIANTS if stats.get(v) is None)
-        return f"| {label} ({unit}) | — | — | not recorded for {missing} |"
 
     def cell(s):
+        if s is None:
+            return "none recorded"
         return f"{fmt.format(s['median'])} ({fmt.format(s['min'])}–{fmt.format(s['max'])})"
+
+    # A variant with nothing to report must not blank out the one that has
+    # something. When the constrained variant never collects there is no pause
+    # total for it, and suppressing naive's alongside would discard a measured
+    # value to keep the row symmetrical.
+    if left is None or right is None:
+        absent = [v for v in VARIANTS if stats.get(v) is None]
+        note = " and ".join(absent) + " recorded none"
+        return f"| {label} ({unit}) | {cell(left)} | {cell(right)} | {note} |"
 
     ratio = "—"
     a, b = left["median"], right["median"]

@@ -1,0 +1,11 @@
+runTag,variant,repetition,exitCode,gc.collections,gc.pauseMillisTotal,internal.gcTimeMillis,external.maxResidentBytes,external.cpuSeconds,external.userCpuSeconds,internal.throughputPerSecond,internal.readingsPublished
+constrained-1,constrained,1,0,0,,0,63.890625,1.47,1.09,499.9,30003
+constrained-2,constrained,2,0,0,,0,65.140625,1.08,0.76,500.0,30003
+constrained-3,constrained,3,0,0,,0,64.546875,1.2,0.85,500.0,30003
+constrained-4,constrained,4,0,0,,0,64.234375,1.19,0.84,500.0,30003
+constrained-5,constrained,5,0,0,,0,64.203125,1.16,0.82,500.0,30003
+naive-1,naive,1,0,4,18.039,17,89.8125,3.71,2.7,499.9,30004
+naive-2,naive,2,0,4,17.69,17,90.75,3.21,2.29,499.9,30005
+naive-3,naive,3,0,4,9.995,9,104.46875,3.11,2.21,499.9,30002
+naive-4,naive,4,0,4,8.81,8,102.53125,3.11,2.23,499.9,30003
+naive-5,naive,5,0,4,8.45,8,102.78125,3.06,2.17,499.9,30004
