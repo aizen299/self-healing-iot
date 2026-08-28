@@ -1,0 +1,63 @@
+{
+  "completedAt": "2026-08-28T08:07:27Z",
+  "config": "experiments/configs/c1-fleet-scalability.env",
+  "durationSeconds": 703,
+  "experimentId": "c1-fleet-scalability",
+  "machine": {
+    "arch": "arm64",
+    "cpuCount": 8,
+    "cpuModel": "Apple M3",
+    "memoryBytes": "8589934592",
+    "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O"
+  },
+  "mqtt": {
+    "broker": "tcp://127.0.0.1:1883",
+    "image": "eclipse-mosquitto, digest-pinned in docker-compose.yml",
+    "qos": "telemetry and heartbeats at QoS 0 (ADR-004)"
+  },
+  "notApplicable": {
+    "kafka": "GATEWAY_KAFKA_ENABLED is off; nothing here reaches Kafka (ADR-009)",
+    "kubernetes": "fleet and gateway run as host JVMs, not on a cluster"
+  },
+  "parameters": {
+    "deviceCounts": [
+      10,
+      25,
+      50
+    ],
+    "failAfterReadings": 30,
+    "failureMode": "HEARTBEAT_STOP",
+    "fleetHeapCap": "64m",
+    "gatewayHeapCap": "256m",
+    "offlineAfterMisses": 4,
+    "publishIntervalMillis": 1000,
+    "repetitions": 3,
+    "runDurationSeconds": 60,
+    "seed": 42,
+    "suspectAfterMisses": 2,
+    "variant": "constrained"
+  },
+  "pillar": "C - fleet scalability against device count",
+  "runId": "c1-fleet-scalability-20260828T075544Z",
+  "scope": {
+    "measured": [
+      "throughput against device count",
+      "fleet-side CPU, resident memory and GC against device count",
+      "gateway-side CPU and resident memory against device count",
+      "heartbeat-detection latency against device count"
+    ],
+    "notMeasured": {
+      "recoveryLatencyAgainstDeviceCount": "needs one device per pod; a per-pod JVM costs ~64 MB of baseline and this host has 8 GB with a Docker VM taking half, so the curve would describe the machine. Phase 11 was scoped to three devices for the same reason (ADR-013)."
+    }
+  },
+  "source": {
+    "commit": "274cc00edb065c3f4d17ddd2df5f354116ec3638",
+    "uncommittedFiles": 0
+  },
+  "startedAt": "2026-08-28T07:55:44Z",
+  "toolchain": {
+    "java": "openjdk version \"21.0.12.1\" 2026-08-18\nOpenJDK Runtime Environment Homebrew (build 21.0.12.1)\nOpenJDK 64-Bit Server VM Homebrew (build 21.0.12.1, mixed mode, sharing)",
+    "javaHome": "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
+    "maven": "Apache Maven 3.9.16 (2bdd9fddda4b155ebf8000e807eb73fd829a51d5)"
+  }
+}

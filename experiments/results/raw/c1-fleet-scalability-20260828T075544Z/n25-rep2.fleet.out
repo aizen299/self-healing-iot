@@ -1,0 +1,28 @@
+=== edge-device simulator (Phase 2) ===
+variant           : CONSTRAINED
+sink              : MQTT (tcp://127.0.0.1:1883, QoS 0)
+devices           : 25
+publish interval  : 1000 ms
+run duration      : 60 s
+failure mode      : HEARTBEAT_STOP (after 30 readings)
+seed              : 42
+jvm               : OpenJDK 64-Bit Server VM 21.0.12.1
+max heap          : 64.0 MiB
+collectors        : G1 Young Generation, G1 Concurrent GC, G1 Old Generation
+
+=== run summary ===
+duration          : 60014 ms
+readings published: 1500
+heartbeats sent   : 750
+payloads delivered: 2250
+bytes delivered   : 215.1 KiB
+throughput        : 25.0 readings/s
+crashed devices   : 0
+sink errors       : 0
+unexpected errors : 0
+connection losses : 0
+gc collections    : 0
+gc time           : 0 ms
+heap in use       : 20.5 MiB
+
+These figures are a demonstration. Only runs recorded under experiments/results/ count as results.
