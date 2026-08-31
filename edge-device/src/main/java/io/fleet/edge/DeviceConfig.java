@@ -43,7 +43,8 @@ public record DeviceConfig(
         long interruptDurationMillis,
         long seed,
         double baseLatitude,
-        double baseLongitude) {
+        double baseLongitude,
+        int threadCountOverride) {
 
     /** Fleet size scoped by ADR-003. */
     public static final int DEFAULT_DEVICE_COUNT = 50;
@@ -80,6 +81,11 @@ public record DeviceConfig(
         }
         if (sink == null) {
             throw new ConfigurationException("sink is required");
+        }
+        if (threadCountOverride < 0) {
+            throw new ConfigurationException(
+                    "FLEET_THREADS must be >= 0 (0 lets the variant decide), got "
+                            + threadCountOverride);
         }
         if (deviceIdPrefix == null || deviceIdPrefix.isBlank()) {
             throw new ConfigurationException("deviceIdPrefix must not be blank");
@@ -166,7 +172,29 @@ public record DeviceConfig(
                 Env.longValue(env, "FLEET_INTERRUPT_DURATION_MS", 5000L),
                 Env.longValue(env, "FLEET_SEED", 42L),
                 Env.doubleValue(env, "FLEET_BASE_LAT", 52.5200d),
-                Env.doubleValue(env, "FLEET_BASE_LON", 13.4050d));
+                Env.doubleValue(env, "FLEET_BASE_LON", 13.4050d),
+                Env.intValue(env, "FLEET_THREADS", 0));
+    }
+
+    /**
+     * How many threads the harness should run the fleet on.
+     *
+     * <p>Normally the variant decides, because thread discipline is one of the
+     * things {@link Variant} exists to express: the constrained fleet shares
+     * one thread and the naive one takes a thread per device (ADR-003).
+     *
+     * <p>{@code FLEET_THREADS} overrides that, and exists for one reason. The
+     * variant changes two things at once — how a payload is encoded, and how
+     * many threads carry it — so a measured difference between the two
+     * variants cannot be attributed to either alone. Being able to hold the
+     * thread count fixed while the encoding changes, and the reverse, is what
+     * separates them. Zero means "let the variant decide", so every existing
+     * run and every manifest behaves exactly as before.
+     */
+    public int effectiveThreadCount() {
+        return threadCountOverride > 0
+                ? threadCountOverride
+                : variant.threadCount(deviceCount);
     }
 
     /**
