@@ -13,7 +13,8 @@ the root `README.md` for the pillar-to-phase mapping.
 
 | Writeup | Pillar | Status |
 |---|---|---|
-| [`pillar-a-constrained-vs-naive.md`](pillar-a-constrained-vs-naive.md) | A — constrained vs. naive | **Recorded**: 5 repetitions of each variant under one 64 MB cap. Identical work; zero GC collections against four, 2.6× less CPU |
+| [`pillar-a-constrained-vs-naive.md`](pillar-a-constrained-vs-naive.md) | A — constrained vs. naive | **Recorded**: 5 repetitions of each variant under one 64 MB cap. Identical work; zero GC collections against four, 2.6× less CPU — but the two variants move two factors at once, so read the ablation beside it |
+| [`pillar-a-ablation-encoding-vs-threading.md`](pillar-a-ablation-encoding-vs-threading.md) | A — ablation | **Recorded**: the 2×2. GC is entirely the encoding; memory mostly the encoding; CPU splits roughly evenly with threading. Corrects two claims in the run above |
 | [`pillar-b-recovery.md`](pillar-b-recovery.md) | B — detection and recovery | **Recorded**, Phase 11: 20 samples, MTTR and recovery success rate |
 | [`pillar-c-scalability.md`](pillar-c-scalability.md) | C — fleet scalability | **Recorded**: 10 → 25 → 50 devices. Zero telemetry lost, detection flat at ~4128 ms, per-device cost falling. Recovery-vs-size still out of reach — see below |
 

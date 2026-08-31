@@ -1,6 +1,7 @@
 package io.fleet.edge;
 
 import io.fleet.common.ConfigurationException;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
@@ -222,5 +223,51 @@ class DeviceConfigTest {
         assertTrue(assertThrows(ConfigurationException.class,
                 () -> DeviceConfig.from(Map.of("FLEET_DEVICE_INDEX_OFFSET", "-1")))
                 .getMessage().contains("deviceIndexOffset"));
+    }
+
+    // --- FLEET_THREADS: separating encoding discipline from thread discipline ---
+
+    @Test
+    @DisplayName("by default the variant still decides the thread count")
+    void threadCountFallsBackToTheVariant() {
+        assertEquals(1, DeviceConfig.from(Map.of(
+                "FLEET_VARIANT", "constrained",
+                "FLEET_DEVICE_COUNT", "50")).effectiveThreadCount());
+        assertEquals(50, DeviceConfig.from(Map.of(
+                "FLEET_VARIANT", "naive",
+                "FLEET_DEVICE_COUNT", "50")).effectiveThreadCount());
+    }
+
+    @Test
+    @DisplayName("FLEET_THREADS overrides the variant's choice in both directions")
+    void threadCountCanBeHeldFixedAcrossVariants() {
+        // The point of the override: run the constrained encoding on a thread
+        // per device, and the naive encoding on one shared thread, so a
+        // measured difference can be attributed to one factor or the other.
+        assertEquals(50, DeviceConfig.from(Map.of(
+                "FLEET_VARIANT", "constrained",
+                "FLEET_DEVICE_COUNT", "50",
+                "FLEET_THREADS", "50")).effectiveThreadCount());
+        assertEquals(1, DeviceConfig.from(Map.of(
+                "FLEET_VARIANT", "naive",
+                "FLEET_DEVICE_COUNT", "50",
+                "FLEET_THREADS", "1")).effectiveThreadCount());
+    }
+
+    @Test
+    @DisplayName("zero means the variant decides, so recorded runs are unchanged")
+    void zeroIsTheDocumentedWayToSayNoOverride() {
+        assertEquals(1, DeviceConfig.from(Map.of(
+                "FLEET_VARIANT", "constrained",
+                "FLEET_DEVICE_COUNT", "50",
+                "FLEET_THREADS", "0")).effectiveThreadCount());
+    }
+
+    @Test
+    @DisplayName("a negative thread count is rejected rather than silently ignored")
+    void negativeThreadCountIsRejected() {
+        ConfigurationException thrown = assertThrows(ConfigurationException.class,
+                () -> DeviceConfig.from(Map.of("FLEET_THREADS", "-1")));
+        assertTrue(thrown.getMessage().contains("FLEET_THREADS"));
     }
 }

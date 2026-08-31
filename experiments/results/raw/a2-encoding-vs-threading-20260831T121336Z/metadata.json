@@ -1,0 +1,46 @@
+{
+  "completedAt": "2026-08-31T12:33:41Z",
+  "config": "experiments/configs/a2-encoding-vs-threading.env",
+  "durationSeconds": 1203,
+  "experimentId": "a2-encoding-vs-threading",
+  "machine": {
+    "arch": "arm64",
+    "cpuCount": 8,
+    "cpuModel": "Apple M3",
+    "memoryBytes": "8589934592",
+    "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O"
+  },
+  "notApplicable": {
+    "kafka": "not on this path; the simulator does not reach Kafka",
+    "kubernetes": "the shared harness runs as one JVM on the host, not on a cluster",
+    "mqtt": "sink is COUNTING; no broker is involved (see the config)"
+  },
+  "parameters": {
+    "arms": [
+      "constrained:1",
+      "constrained:50",
+      "naive:1",
+      "naive:50"
+    ],
+    "deviceCount": 50,
+    "failureMode": "NONE",
+    "heapCap": "64m",
+    "publishIntervalMillis": 100,
+    "repetitionsPerArm": 5,
+    "runDurationSeconds": 60,
+    "seed": 42,
+    "sink": "COUNTING"
+  },
+  "pillar": "A - constrained vs naive Java under an identical heap cap",
+  "runId": "a2-encoding-vs-threading-20260831T121336Z",
+  "source": {
+    "commit": "c88bc4d79e797c195e287ba8f7f911d6e5ee7948",
+    "uncommittedFiles": 0
+  },
+  "startedAt": "2026-08-31T12:13:38Z",
+  "toolchain": {
+    "java": "openjdk version \"21.0.12.1\" 2026-08-18\nOpenJDK Runtime Environment Homebrew (build 21.0.12.1)\nOpenJDK 64-Bit Server VM Homebrew (build 21.0.12.1, mixed mode, sharing)",
+    "javaHome": "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
+    "maven": "Apache Maven 3.9.16 (2bdd9fddda4b155ebf8000e807eb73fd829a51d5)"
+  }
+}

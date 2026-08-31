@@ -48,7 +48,7 @@ public final class FleetHarness implements AutoCloseable {
         this.config = config;
         this.sinks = sinks;
         this.devices = DeviceFactory.createFleet(config, sinks);
-        int threads = config.variant().threadCount(config.deviceCount());
+        int threads = config.effectiveThreadCount();
         this.scheduler = Executors.newScheduledThreadPool(threads, namedThreads());
         // Seeded at construction so result() before start() reports a
         // near-zero duration instead of the whole Unix epoch, which would look
