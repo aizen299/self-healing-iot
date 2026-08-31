@@ -1,0 +1,28 @@
+=== edge-device simulator (Phase 2) ===
+variant           : CONSTRAINED
+sink              : COUNTING
+devices           : 50
+publish interval  : 100 ms
+run duration      : 60 s
+failure mode      : NONE
+seed              : 42
+jvm               : OpenJDK 64-Bit Server VM 21.0.12.1
+max heap          : 64.0 MiB
+collectors        : G1 Young Generation, G1 Concurrent GC, G1 Old Generation
+
+=== run summary ===
+duration          : 60022 ms
+readings published: 30006
+heartbeats sent   : 30006
+payloads delivered: 60012
+bytes delivered   : 4.8 MiB
+throughput        : 499.9 readings/s
+crashed devices   : 0
+sink errors       : 0
+unexpected errors : 0
+connection losses : 0
+gc collections    : 0
+gc time           : 0 ms
+heap in use       : 20.0 MiB
+
+These figures are a demonstration. Only runs recorded under experiments/results/ count as results.

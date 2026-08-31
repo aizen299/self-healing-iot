@@ -79,11 +79,19 @@ schedule*, for **2.6× less CPU** and **1.6× less resident memory**. Reading
 licenses every other row.
 
 **The memory figure is not mostly heap.** Both ran under the same 64 MB cap
-and neither approached it. The 38 MB difference in resident set is dominated
-by the threading decision — fifty thread stacks against one — which is why
-`Variant` selects the fleet's threading policy rather than leaving it to the
-harness. Thread discipline is a resource decision, not an implementation
-detail.
+and neither approached it, so the difference is in what the process holds
+outside the heap.
+
+> **Correction (2026-08-31).** This section previously attributed that
+> difference to "fifty thread stacks against one". That was reasoning, not
+> measurement, and the ablation in
+> [`pillar-a-ablation-encoding-vs-threading.md`](pillar-a-ablation-encoding-vs-threading.md)
+> shows it is wrong: holding the thread count fixed, the encoding accounts for
+> 1.53x of the resident set, while holding the encoding fixed, the thread count
+> accounts for only 1.12x. Memory is dominated by allocation discipline, not by
+> thread stacks. The same ablation shows the CPU difference is roughly an even
+> split between the two factors rather than mostly discipline, and that the
+> zero-collection result is attributable to the encoding alone.
 
 **The spread is narrow enough to trust the medians.** Constrained CPU ranges
 1.08–1.47 s and naive 3.06–3.71 s: the distributions do not come close to
@@ -113,6 +121,11 @@ is in the config so anyone who thinks it matters can re-run at 1000 ms.
 G1. Nothing here generalises to another collector, another architecture, or a
 container with a different memory limit without re-running — which is what the
 committed runner is for.
+
+**Two variables move together here.** `constrained` and `naive` differ in both
+payload encoding and thread count, so no figure in this run can be attributed
+to either on its own. That is what the companion ablation exists to resolve;
+until it is read alongside this one, every ratio above is a combined effect.
 
 **The readings differ by one.** 30,003 against 30,004, which is where the
 60-second boundary falls relative to a 100 ms tick, not a difference in work.
