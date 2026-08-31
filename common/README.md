@@ -5,8 +5,8 @@ definitions, MQTT/Kafka topic name constants, and small utilities. Kept
 deliberately thin — this is not a dumping ground for unrelated shared
 logic. No dependencies.
 
-**Status:** Phases 1–3 complete for the telemetry path. Kafka topic
-constants arrive in Phase 6; gateway-facing event DTOs in Phases 3–4.
+**Status:** complete. Telemetry and event DTOs, the wire format, MQTT and
+Kafka topic constants, and the small shared utilities every module builds on.
 
 ## Contents
 

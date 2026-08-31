@@ -3,9 +3,8 @@
 Dockerfiles per module and the root `docker-compose.yml` for running the
 local stack: MQTT broker, gateway, and a fleet of simulated devices.
 
-**Status:** broker, gateway, fleet, Kafka, and the stream processor. A
-time-series database, Prometheus, and Grafana join as their phases land.
-The same images run on Kubernetes from Phase 8 —
+**Status:** complete. Broker, gateway, fleet, Kafka, the stream processor,
+Prometheus and Grafana. The same images run on Kubernetes —
 [`infrastructure/kubernetes/`](../kubernetes/).
 
 Kafka is the heaviest service by a wide margin. `docker compose up broker

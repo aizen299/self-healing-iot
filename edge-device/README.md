@@ -5,11 +5,17 @@ battery level, location) with a configurable publishing interval and
 deterministic, configurable failure modes, and publishes it through the
 `TelemetrySink` seam.
 
-**Status:** complete through Phase 8. Both variants, the fleet harness,
-MQTT publishing, heartbeats, and all four failure modes are implemented and
-tested. Devices publish to a real broker with one connection each; see
-[`docs/api/mqtt-topics.md`](../docs/api/mqtt-topics.md). A process can run
-the whole fleet or a single device, which is what Kubernetes needs.
+**Status:** complete, and measured. Both variants, the fleet harness, MQTT
+publishing, heartbeats, and all four failure modes are implemented and tested.
+Devices publish to a real broker with one connection each; see
+[`docs/api/mqtt-topics.md`](../docs/api/mqtt-topics.md). A process can run the
+whole fleet or a single device, which is what Kubernetes needs.
+
+The constrained/naive comparison this module exists for is recorded in
+[`docs/experiments/pillar-a-constrained-vs-naive.md`](../docs/experiments/pillar-a-constrained-vs-naive.md):
+under one 64 MB cap, doing byte-identical work, the constrained variant
+triggers no garbage collections at all against the naive baseline's four, for
+2.6x less CPU.
 
 ## One process, or one device per process
 

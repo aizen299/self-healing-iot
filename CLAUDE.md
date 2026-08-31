@@ -126,8 +126,9 @@ and why self-heal will not undo a `kubectl set env`.
 Images and device pods stay with `deploy.sh`: Argo applies manifests and
 neither builds nor loads images, and `kind` has no registry.
 
-`infrastructure/helm/` stays empty. Argo applies plain directories, and a chart
-would template for one environment with no second one to differ from it.
+There is no Helm chart and no `infrastructure/helm/`. Argo applies plain
+directories, and a chart would template for one environment with no second one
+to differ from it (ADR-016).
 
 The full stack runs in containers, published on **18080** because 8080 is
 already taken on this machine (Jenkins):
@@ -365,13 +366,11 @@ duplicate the wire format.
 | `infrastructure/docker/` | Per-module Dockerfiles + root `docker-compose.yml` for the full local stack |
 | `infrastructure/kubernetes/` | Manifests for kind/Minikube: Deployments, ConfigMaps, probes, RBAC. Workload labels (`app=edge-device`, `device-id=...`, `fleet-id=...`) are how the recovery operator identifies/replaces workloads |
 | `infrastructure/gitops/` | Argo CD: the AppProject that draws the fleet boundary, the app-of-apps, `bootstrap.sh` |
-| `infrastructure/helm/` | Reserved for a chart, deliberately still empty (ADR-016) |
 | `infrastructure/monitoring/` | Prometheus scrape config and Grafana provisioning. `grafana/dashboards/fleet.json` is the dashboard and the only copy of it — `deploy.sh` builds the ConfigMap from that file |
 | `experiments/` | `configs/`, `scripts/`, `results/{raw,processed}/` — see reproducibility contract below |
 | `docs/decisions/` | ADRs (numbered `ADR-NNN-*.md`) for major architecture decisions |
-| `docs/architecture/`, `docs/api/`, `docs/experiments/` | Architecture docs, gateway API docs, experiment writeups — written to describe what exists, not what's planned |
+| `docs/api/`, `docs/experiments/` | Wire/HTTP contracts and experiment writeups — written to describe what exists, not what's planned |
 | `tests/integration`, `tests/e2e` | Cross-module suites — see testing requirements below |
-| `tests/unit` | Reserved for cross-module unit-level suites; currently empty. Per-module unit tests live in each module's `src/test/java` |
 | `.github/workflows/`, `.github/scripts/` | CI pipeline and the checks it runs. `assert-suite-complete.py` is the gate that a skipped test cannot pass; `assert-gitops-sane.py` checks the Argo manifests kubeconform has no schema for |
 
 Each module's own `README.md` is the source of truth for that module's
@@ -387,14 +386,11 @@ Charts are generated from collected data, never from assumptions.
 
 ## Testing requirements
 
-- **Unit** (each module's own `src/test/java`, *not* `tests/unit`):
-  telemetry validation, heartbeat logic, failure state transitions,
-  recovery decision logic, configuration validation. Unit tests live
-  beside the code they cover so `mvn test` in a module actually verifies
-  that module — moving them to a top-level directory would break the
-  independently-buildable modules ADR-001 is built around. `tests/unit`
-  stays for genuinely cross-module unit-level suites, and is currently
-  empty; see `tests/unit/README.md`.
+- **Unit** — each module's own `src/test/java`, and nowhere else. Unit tests
+  live beside the code they cover so `mvn test` in a module actually verifies
+  that module; a top-level unit directory would break the
+  independently-buildable modules ADR-001 is built around, which is why there
+  is no `tests/unit`.
 - **Integration** (`tests/integration`): MQTT→Gateway, Gateway→Kafka,
   Kafka→storage, failure event→recovery.
 - **E2E** — the project's core reproducible demo: start device → send

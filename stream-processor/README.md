@@ -4,7 +4,7 @@ Kafka Streams topology over the fleet's telemetry. Reads `telemetry.raw`,
 groups by device, and emits a summary per device per window to
 `telemetry.processed`.
 
-**Status:** Phase 6 complete. Windowed aggregation and status counts.
+**Status:** complete. Windowed aggregation and status counts.
 
 ## What a window contains
 

@@ -3,8 +3,8 @@
 Java MQTT gateway. Subscribes to device topics, validates and deserializes
 telemetry, tracks per-device state, and exposes a health/status API.
 
-**Status:** complete through Phase 8 — ingestion, validation, the device
-registry, the HTTP API, automatic failure detection, persistent history,
+**Status:** complete — ingestion, validation, the device registry, the HTTP
+API, automatic failure detection, persistent history, Prometheus exposition,
 and forwarding to Kafka. Runs on Docker and on Kubernetes.
 
 Two runtime dependencies — the Paho MQTT client and Jackson's streaming

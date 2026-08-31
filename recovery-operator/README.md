@@ -9,9 +9,11 @@ device → telemetry → monitoring → failure detected → recovery event
   → controller → replacement workload → healthy fleet restored
 ```
 
-**Status:** Phase 9 complete. Failure consumption, idempotent replacement,
-RBAC, and the recovery announcement are implemented and tested, and the
-loop has been demonstrated end to end on kind.
+**Status:** complete, and measured. Failure consumption, idempotent
+replacement, RBAC, and the recovery announcement are implemented and tested.
+The loop's recovery time is recorded in
+[`docs/experiments/pillar-b-recovery.md`](../docs/experiments/pillar-b-recovery.md):
+20 injected failures, 100% recovered, median MTTR 1332.5 ms.
 
 Design decisions are in
 [ADR-011](../docs/decisions/ADR-011-recovery-operator-shape.md).
